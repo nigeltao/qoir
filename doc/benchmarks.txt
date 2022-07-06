@@ -1,0 +1,40 @@
+The bottom of this file captures the output of
+
+    time ./run_benchmarks.sh images
+
+when run from the repository root directory. This takes about 2 minutes on my
+desktop machine. The images directory was unpacked from the tar file at
+
+    https://qoiformat.org/benchmark/
+
+---
+
+My desktop machine:
+
+    $ cat /proc/cpuinfo | grep model.name | uniq
+    model name	: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
+    $ gcc --version
+    gcc (Debian 10.2.1-6) 10.2.1 20210110
+
+---
+
+CmpRatio     = Compression Ratio
+EncMPixels/s = Encode MegaPixels per second
+DecMPixels/s = Decode MegaPixels per second
+
+---
+
+QOI     0.2825 CmpRatio    141.74 EncMPixels/s    186.24 DecMPixels/s  images/
+QOI     0.0835 CmpRatio    254.64 EncMPixels/s    352.43 DecMPixels/s  images/icon_512/
+QOI     0.2870 CmpRatio    190.10 EncMPixels/s    215.17 DecMPixels/s  images/icon_64/
+QOI     0.5829 CmpRatio     99.26 EncMPixels/s    125.24 DecMPixels/s  images/photo_kodak/
+QOI     0.5992 CmpRatio     94.60 EncMPixels/s    124.35 DecMPixels/s  images/photo_tecnick/
+QOI     0.6618 CmpRatio     94.03 EncMPixels/s    122.97 DecMPixels/s  images/photo_wikipedia/
+QOI     0.2043 CmpRatio    163.20 EncMPixels/s    228.61 DecMPixels/s  images/pngimg/
+QOI     0.2453 CmpRatio    151.64 EncMPixels/s    189.89 DecMPixels/s  images/screenshot_game/
+QOI     0.0835 CmpRatio    242.43 EncMPixels/s    336.44 DecMPixels/s  images/screenshot_web/
+QOI     0.6452 CmpRatio    111.21 EncMPixels/s    131.66 DecMPixels/s  images/textures_photo/
+QOI     0.5645 CmpRatio     98.48 EncMPixels/s    122.34 DecMPixels/s  images/textures_pk/
+QOI     0.3516 CmpRatio    120.27 EncMPixels/s    162.98 DecMPixels/s  images/textures_pk01/
+QOI     0.4038 CmpRatio    109.94 EncMPixels/s    138.33 DecMPixels/s  images/textures_pk02/
+QOI     0.2219 CmpRatio    165.46 EncMPixels/s    243.16 DecMPixels/s  images/textures_plants/
