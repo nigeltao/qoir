@@ -64,6 +64,7 @@ extern "C" {
 
 extern const char qoir_status_message__error_invalid_argument[];
 extern const char qoir_status_message__error_invalid_data[];
+extern const char qoir_status_message__error_out_of_memory[];
 extern const char qoir_status_message__error_unsupported_pixbuf[];
 extern const char qoir_status_message__error_unsupported_pixfmt[];
 
@@ -174,18 +175,117 @@ qoir_encode(                          //
 
 // ================================ +Private Implementation
 
+static inline uint32_t  //
+qoir_private_peek_u32be(const uint8_t* p) {
+  return ((uint32_t)(p[0]) << 24) | ((uint32_t)(p[1]) << 16) |
+         ((uint32_t)(p[2]) << 8) | ((uint32_t)(p[3]) << 0);
+}
+
+static inline uint32_t  //
+qoir_private_hash(const uint8_t* p) {
+  return 63 & ((0x03 * (uint32_t)p[0]) +  //
+               (0x05 * (uint32_t)p[1]) +  //
+               (0x07 * (uint32_t)p[2]) +  //
+               (0x0B * (uint32_t)p[3]));
+}
+
 // -------- Status Messages
 
 const char qoir_status_message__error_invalid_argument[] =  //
     "#qoir: invalid argument";
 const char qoir_status_message__error_invalid_data[] =  //
     "#qoir: invalid data";
+const char qoir_status_message__error_out_of_memory[] =  //
+    "#qoir: out of memory";
 const char qoir_status_message__error_unsupported_pixbuf[] =  //
     "#qoir: unsupported pixbuf";
 const char qoir_status_message__error_unsupported_pixfmt[] =  //
     "#qoir: unsupported pixfmt";
 
 // -------- QOIR Decode / Encode
+
+static const char*                  //
+qoir_private_decode_tile(           //
+    qoir_pixel_format dst_pixfmt,   //
+    uint32_t dst_width_in_pixels,   //
+    uint32_t dst_height_in_pixels,  //
+    uint8_t* dst_data,              //
+    size_t dst_stride_in_bytes,     //
+    qoir_pixel_format src_pixfmt,   //
+    const uint8_t* src_ptr,         //
+    size_t src_len) {
+  if (src_len < 8) {
+    return qoir_status_message__error_invalid_data;
+  }
+
+  uint32_t run_length = 0;
+  // TODO: support dst pixfmt values other than RGB and RGBA_NONPREMUL.
+  bool dst_has_alpha = qoir_pixel_format__bytes_per_pixel(dst_pixfmt) == 4;
+  // The array-of-four-uint8_t elements are in R, G, B, A order.
+  uint8_t color_cache[64][4] = {0};
+  uint8_t pixel[4] = {0};
+  pixel[3] = 0xFF;
+
+  // TODO: dst pixbuf isn't always tightly packed (so stride != width * bpp).
+  uint8_t* dp = dst_data;
+  uint8_t* dq = dst_data + (dst_height_in_pixels * dst_stride_in_bytes);
+  const uint8_t* sp = src_ptr;
+  const uint8_t* sq = src_ptr + src_len - 8;
+  while (dp < dq) {
+    if (run_length > 0) {
+      run_length--;
+
+    } else if (sp < sq) {
+      uint8_t s0 = *sp++;
+      if (s0 == 0xFE) {  // QOI_OP_RGB
+        pixel[0] = *sp++;
+        pixel[1] = *sp++;
+        pixel[2] = *sp++;
+      } else if (s0 == 0xFF) {  // QOI_OP_RGBA
+        pixel[0] = *sp++;
+        pixel[1] = *sp++;
+        pixel[2] = *sp++;
+        pixel[3] = *sp++;
+      } else {
+        switch (s0 >> 6) {
+          case 0: {  // QOI_OP_INDEX
+            memcpy(pixel, color_cache[s0], 4);
+            break;
+          }
+          case 1: {  // QOI_OP_DIFF
+            pixel[0] += ((s0 >> 4) & 0x03) - 2;
+            pixel[1] += ((s0 >> 2) & 0x03) - 2;
+            pixel[2] += ((s0 >> 0) & 0x03) - 2;
+            break;
+          }
+          case 2: {  // QOI_OP_LUMA
+            uint8_t s1 = *sp++;
+            uint8_t delta_g = (s0 & 0x3F) - 32;
+            pixel[0] += delta_g - 8 + (s1 >> 4);
+            pixel[1] += delta_g;
+            pixel[2] += delta_g - 8 + (s1 & 0x0F);
+            break;
+          }
+          case 3: {  // QOI_OP_RUN
+            run_length = s0 & 0x3F;
+            break;
+          }
+        }
+      }
+      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+    }
+
+    if (dst_has_alpha) {
+      memcpy(dp, pixel, 4);
+      dp += 4;
+    } else {
+      memcpy(dp, pixel, 3);
+      dp += 3;
+    }
+  }
+
+  return NULL;
+}
 
 QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
 qoir_decode_pixel_configuration(                          //
@@ -202,24 +302,47 @@ qoir_decode(                          //
     size_t src_len,                   //
     qoir_decode_options* options) {
   qoir_decode_result result = {0};
-  qoir_pixel_format pixfmt = (options && options->pixfmt)
-                                 ? options->pixfmt
-                                 : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
-
-  qoi_desc desc;
-  size_t bpp = qoir_pixel_format__bytes_per_pixel(pixfmt);
-  void* pixbuf_data = qoi_decode(src_ptr, src_len, &desc, bpp);
-  if (!pixbuf_data) {
+  if ((src_len < 14) || (qoir_private_peek_u32be(src_ptr) != 0x716F6966)) {
+    result.status_message = qoir_status_message__error_invalid_data;
+    return result;
+  }
+  uint32_t width = qoir_private_peek_u32be(src_ptr + 4);
+  uint32_t height = qoir_private_peek_u32be(src_ptr + 8);
+  qoir_pixel_format src_pixfmt = QOIR_PIXEL_FORMAT__INVALID;
+  if (src_ptr[12] == 3) {
+    src_pixfmt = QOIR_PIXEL_FORMAT__RGB;
+  } else if (src_ptr[12] == 4) {
+    src_pixfmt = QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
+  } else {
     result.status_message = qoir_status_message__error_invalid_data;
     return result;
   }
 
+  qoir_pixel_format dst_pixfmt = (options && options->pixfmt)
+                                     ? options->pixfmt
+                                     : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
+  size_t dst_bpp = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+  size_t pixbuf_len = width * height * dst_bpp;  // TODO: handle overflow.
+  uint8_t* pixbuf_data = malloc(pixbuf_len);
+  if (!pixbuf_data) {
+    result.status_message = qoir_status_message__error_out_of_memory;
+    return result;
+  }
+  const char* status_message = qoir_private_decode_tile(
+      dst_pixfmt, width, height, pixbuf_data, dst_bpp * (size_t)width,
+      src_pixfmt, src_ptr + 14, src_len - 14);
+  if (status_message) {
+    result.status_message = status_message;
+    free(pixbuf_data);
+    return result;
+  }
+
   result.owned_memory = pixbuf_data;
-  result.dst_pixbuf.pixcfg.pixfmt = pixfmt;
-  result.dst_pixbuf.pixcfg.width_in_pixels = desc.width;
-  result.dst_pixbuf.pixcfg.height_in_pixels = desc.height;
+  result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
+  result.dst_pixbuf.pixcfg.width_in_pixels = width;
+  result.dst_pixbuf.pixcfg.height_in_pixels = height;
   result.dst_pixbuf.data = pixbuf_data;
-  result.dst_pixbuf.stride_in_bytes = bpp * (size_t)desc.width;
+  result.dst_pixbuf.stride_in_bytes = dst_bpp * (size_t)width;
   return result;
 }
 
