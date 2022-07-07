@@ -49,7 +49,7 @@ print_timings(timings* t,
   double cratio = t->compressed_size / ((double)(t->original_size));
   double espeed = t->encode_pixels / ((double)(t->encode_micros));
   double dspeed = t->decode_pixels / ((double)(t->decode_micros));
-  printf("QOI     %6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
+  printf("QOIR    %6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
          cratio, espeed, dspeed, name0, name1, name2);
 }
 

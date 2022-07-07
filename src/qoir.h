@@ -170,18 +170,83 @@ qoir_encode(                          //
 
 // ================================ +Private Implementation
 
+// This implementation assumes that:
+//  - converting a uint32_t to a size_t will never overflow.
+//  - converting a size_t to a uint64_t will never overflow.
+#if defined(__WORDSIZE)
+#if (__WORDSIZE != 32) && (__WORDSIZE != 64)
+#error "qoir.h requires a word size of either 32 or 64 bits"
+#endif
+#endif
+
+// Normally, the qoir_private_peek_etc and qoir_private_poke_etc
+// implementations are both (1) correct regardless of CPU endianness and (2)
+// very fast (e.g. an inlined qoir_private_peek_u32le call, in an optimized
+// clang or gcc build, is a single MOV instruction on x86_64).
+//
+// However, the endian-agnostic implementations are slow on Microsoft's C
+// compiler (MSC). Alternative memcpy-based implementations restore speed, but
+// they are only correct on little-endian CPU architectures. Defining
+// QOIR_USE_MEMCPY_LE_PEEK_POKE opts in to these implementations.
+//
+// https://godbolt.org/z/q4MfjzTPh
+#if defined(_MSC_VER) && !defined(__clang__) && \
+    (defined(_M_ARM64) || defined(_M_X64))
+#define QOIR_USE_MEMCPY_LE_PEEK_POKE
+#endif
+
 static inline uint32_t  //
-qoir_private_peek_u32be(const uint8_t* p) {
-  return ((uint32_t)(p[0]) << 24) | ((uint32_t)(p[1]) << 16) |
-         ((uint32_t)(p[2]) << 8) | ((uint32_t)(p[3]) << 0);
+qoir_private_peek_u32le(const uint8_t* p) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  uint32_t x;
+  memcpy(&x, p, 4);
+  return x;
+#else
+  return ((uint32_t)(p[0]) << 0) | ((uint32_t)(p[1]) << 8) |
+         ((uint32_t)(p[2]) << 16) | ((uint32_t)(p[3]) << 24);
+#endif
+}
+
+static inline uint64_t  //
+qoir_private_peek_u64le(const uint8_t* p) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  uint64_t x;
+  memcpy(&x, p, 8);
+  return x;
+#else
+  return ((uint64_t)(p[0]) << 0) | ((uint64_t)(p[1]) << 8) |
+         ((uint64_t)(p[2]) << 16) | ((uint64_t)(p[3]) << 24) |
+         ((uint64_t)(p[4]) << 32) | ((uint64_t)(p[5]) << 40) |
+         ((uint64_t)(p[6]) << 48) | ((uint64_t)(p[7]) << 56);
+#endif
 }
 
 static inline void  //
-qoir_private_poke_u32be(uint8_t* p, uint32_t x) {
-  p[0] = (uint8_t)(x >> 24);
-  p[1] = (uint8_t)(x >> 16);
-  p[2] = (uint8_t)(x >> 8);
-  p[3] = (uint8_t)(x >> 0);
+qoir_private_poke_u32le(uint8_t* p, uint32_t x) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  memcpy(p, &x, 4);
+#else
+  p[0] = (uint8_t)(x >> 0);
+  p[1] = (uint8_t)(x >> 8);
+  p[2] = (uint8_t)(x >> 16);
+  p[3] = (uint8_t)(x >> 24);
+#endif
+}
+
+static inline void  //
+qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  memcpy(p, &x, 8);
+#else
+  p[0] = (uint8_t)(x >> 0);
+  p[1] = (uint8_t)(x >> 8);
+  p[2] = (uint8_t)(x >> 16);
+  p[3] = (uint8_t)(x >> 24);
+  p[4] = (uint8_t)(x >> 32);
+  p[5] = (uint8_t)(x >> 40);
+  p[6] = (uint8_t)(x >> 48);
+  p[7] = (uint8_t)(x >> 56);
+#endif
 }
 
 static inline uint32_t  //
@@ -312,47 +377,120 @@ qoir_decode(                          //
     size_t src_len,                   //
     qoir_decode_options* options) {
   qoir_decode_result result = {0};
-  if ((src_len < 14) || (qoir_private_peek_u32be(src_ptr) != 0x716F6966)) {
+  if ((src_len < 44) ||
+      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
     result.status_message = qoir_status_message__error_invalid_data;
     return result;
   }
-  uint32_t width = qoir_private_peek_u32be(src_ptr + 4);
-  uint32_t height = qoir_private_peek_u32be(src_ptr + 8);
-  qoir_pixel_format src_pixfmt = QOIR_PIXEL_FORMAT__INVALID;
-  if (src_ptr[12] == 3) {
-    src_pixfmt = QOIR_PIXEL_FORMAT__RGB;
-  } else if (src_ptr[12] == 4) {
-    src_pixfmt = QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
-  } else {
+  uint64_t qoir_chunk_payload_length = qoir_private_peek_u64le(src_ptr + 4);
+  if ((qoir_chunk_payload_length < 8) ||
+      (qoir_chunk_payload_length > 0x7FFFFFFFFFFFFFFFull) ||
+      (qoir_chunk_payload_length > (src_len - 44))) {
     result.status_message = qoir_status_message__error_invalid_data;
     return result;
   }
+  uint8_t* pixbuf_data = NULL;
+
+  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
+  uint32_t width_in_pixels = 0xFFFFFF & header0;
+  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
+  switch (src_pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      break;
+    default:
+      goto fail_invalid_data;
+  }
+  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
+  uint32_t height_in_pixels = 0xFFFFFF & header1;
 
   qoir_pixel_format dst_pixfmt = (options && options->pixfmt)
                                      ? options->pixfmt
                                      : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
-  size_t dst_bpp = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
-  size_t pixbuf_len = width * height * dst_bpp;  // TODO: handle overflow.
-  uint8_t* pixbuf_data = malloc(pixbuf_len);
-  if (!pixbuf_data) {
-    result.status_message = qoir_status_message__error_out_of_memory;
-    return result;
+  uint64_t dst_width_in_bytes =
+      width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+
+  bool seen_qpix = false;
+  const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_length);
+  size_t sn = src_len - (12 + qoir_chunk_payload_length);
+  while (1) {
+    if (sn < 12) {
+      goto fail_invalid_data;
+    }
+    uint32_t chunk_type = qoir_private_peek_u32le(sp + 0);
+    uint64_t payload_length = qoir_private_peek_u64le(sp + 4);
+    if (payload_length > 0x7FFFFFFFFFFFFFFFull) {
+      goto fail_invalid_data;
+    }
+    sp += 12;
+    sn -= 12;
+
+    if (chunk_type == 0x52494F51) {  // "QOIR"le.
+      goto fail_invalid_data;
+    } else if (chunk_type == 0x444E4551) {  // "QEND"le.
+      if ((payload_length != 0) || (sn != 0)) {
+        goto fail_invalid_data;
+      }
+      break;
+    }
+
+    // This chunk must be followed by at least the QEND chunk (12 bytes).
+    if ((sn < payload_length) || ((sn - payload_length) < 12)) {
+      goto fail_invalid_data;
+    }
+
+    if (chunk_type == 0x58495051) {  // "QPIX"le.
+      if (seen_qpix) {
+        goto fail_invalid_data;
+      }
+      seen_qpix = true;
+
+      uint64_t pixbuf_len = dst_width_in_bytes * (uint64_t)height_in_pixels;
+      if (pixbuf_len > SIZE_MAX) {
+        result.status_message =
+            qoir_status_message__error_unsupported_pixbuf_dimensions;
+        return result;
+      } else if (pixbuf_len > 0) {
+        pixbuf_data = malloc((size_t)pixbuf_len);
+        if (!pixbuf_data) {
+          result.status_message = qoir_status_message__error_out_of_memory;
+          return result;
+        }
+        // Pass (payload_length + 8) so that opcode decoding can always peek
+        // for 8 bytes, even at the end of the opcode stream.
+        const char* status_message = qoir_private_decode_tile(
+            dst_pixfmt, width_in_pixels, height_in_pixels, pixbuf_data,
+            dst_width_in_bytes, src_pixfmt, sp, payload_length + 8);
+        if (status_message) {
+          result.status_message = status_message;
+          free(pixbuf_data);
+          return result;
+        }
+      } else if (payload_length != 0) {
+        goto fail_invalid_data;
+      }
+    }
+
+    sp += payload_length;
+    sn -= payload_length;
   }
-  const char* status_message = qoir_private_decode_tile(
-      dst_pixfmt, width, height, pixbuf_data, dst_bpp * (size_t)width,
-      src_pixfmt, src_ptr + 14, src_len - 14);
-  if (status_message) {
-    result.status_message = status_message;
-    free(pixbuf_data);
-    return result;
+
+  if (!seen_qpix) {
+    goto fail_invalid_data;
   }
 
   result.owned_memory = pixbuf_data;
   result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
-  result.dst_pixbuf.pixcfg.width_in_pixels = width;
-  result.dst_pixbuf.pixcfg.height_in_pixels = height;
+  result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
+  result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
   result.dst_pixbuf.data = pixbuf_data;
-  result.dst_pixbuf.stride_in_bytes = dst_bpp * (size_t)width;
+  result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
+  return result;
+
+fail_invalid_data:
+  result.status_message = qoir_status_message__error_invalid_data;
+  free(pixbuf_data);
   return result;
 }
 
@@ -495,8 +633,9 @@ qoir_encode(                          //
   }
 
   uint64_t dst_len_worst_case =
-      22 +          // Header (14 bytes) + footer (8 bytes).
-      (5 * w * h);  // Worst case, every pixel is QOI_OP_RGBA (5 bytes).
+      (5 * w * h) +  // Worst case, every pixel is QOI_OP_RGBA (5 bytes).
+      44;            // QOIR, QPIX, QEND chunk headers are 12 bytes each.
+                     // QOIR also has an 8 byte payload.
   if (dst_len_worst_case > SIZE_MAX) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
@@ -508,33 +647,43 @@ qoir_encode(                          //
     return result;
   }
 
-  // Header.
-  qoir_private_poke_u32be(dst_ptr + 0, 0x716F6966);
-  qoir_private_poke_u32be(dst_ptr + 4, src_pixbuf->pixcfg.width_in_pixels);
-  qoir_private_poke_u32be(dst_ptr + 8, src_pixbuf->pixcfg.height_in_pixels);
-  dst_ptr[12] = (uint8_t)num_channels;
-  dst_ptr[13] = 0x00;  // TODO: sRGB vs linear (vs other) color space.
+  // QOIR chunk.
+  qoir_private_poke_u32le(dst_ptr + 0, 0x52494F51);  // "QOIR"le.
+  qoir_private_poke_u64le(dst_ptr + 4, 8);
+  qoir_private_poke_u32le(dst_ptr + 12, src_pixbuf->pixcfg.width_in_pixels);
+  qoir_private_poke_u32le(dst_ptr + 16, src_pixbuf->pixcfg.height_in_pixels);
+  dst_ptr[15] = (num_channels == 3) ? QOIR_PIXEL_FORMAT__BGRX
+                                    : QOIR_PIXEL_FORMAT__BGRA_NONPREMUL;
 
-  // Payload.
+  // QPIX chunk.
+  qoir_private_poke_u32le(dst_ptr + 20, 0x58495051);  // "QPIX"le.
   qoir_private_size_t_result r =
-      qoir_private_encode_tile(dst_ptr + 14, src_pixbuf);
+      qoir_private_encode_tile(dst_ptr + 32, src_pixbuf);
   if (r.status_message) {
     result.status_message = r.status_message;
     free(dst_ptr);
     return result;
+  } else if ((uint64_t)r.value > 0x7FFFFFFFFFFFFFFFull) {
+    result.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    free(dst_ptr);
+    return result;
   }
+  qoir_private_poke_u64le(dst_ptr + 24, r.value);
 
-  // Footer: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01].
-  uint8_t* dp = dst_ptr + 14 + r.value;
-  for (uint8_t i = 0; i < 8; i++) {
-    *dp++ = (i + 1) >> 3;
-  }
+  // QEND chunk.
+  qoir_private_poke_u32le(dst_ptr + 32 + r.value, 0x444E4551);  // "QEND"le.
+  qoir_private_poke_u64le(dst_ptr + 36 + r.value, 0);
 
   result.owned_memory = dst_ptr;
   result.dst_ptr = dst_ptr;
-  result.dst_len = 22 + r.value;
+  result.dst_len = 44 + r.value;
   return result;
 }
+
+// --------
+
+#undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 
 // ================================ -Private Implementation
 
