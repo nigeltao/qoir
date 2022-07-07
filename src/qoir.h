@@ -26,12 +26,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// TODO: remove the dependency.
-#ifdef QOIR_IMPLEMENTATION
-#define QOI_IMPLEMENTATION
-#endif
-#include "../third_party/qoi/qoi.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -66,6 +60,7 @@ extern const char qoir_status_message__error_invalid_argument[];
 extern const char qoir_status_message__error_invalid_data[];
 extern const char qoir_status_message__error_out_of_memory[];
 extern const char qoir_status_message__error_unsupported_pixbuf[];
+extern const char qoir_status_message__error_unsupported_pixbuf_dimensions[];
 extern const char qoir_status_message__error_unsupported_pixfmt[];
 
 // -------- Pixel Buffers
@@ -181,6 +176,14 @@ qoir_private_peek_u32be(const uint8_t* p) {
          ((uint32_t)(p[2]) << 8) | ((uint32_t)(p[3]) << 0);
 }
 
+static inline void  //
+qoir_private_poke_u32be(uint8_t* p, uint32_t x) {
+  p[0] = (uint8_t)(x >> 24);
+  p[1] = (uint8_t)(x >> 16);
+  p[2] = (uint8_t)(x >> 8);
+  p[3] = (uint8_t)(x >> 0);
+}
+
 static inline uint32_t  //
 qoir_private_hash(const uint8_t* p) {
   return 63 & ((0x03 * (uint32_t)p[0]) +  //
@@ -188,6 +191,11 @@ qoir_private_hash(const uint8_t* p) {
                (0x07 * (uint32_t)p[2]) +  //
                (0x0B * (uint32_t)p[3]));
 }
+
+typedef struct qoir_private_size_t_result_struct {
+  const char* status_message;
+  size_t value;
+} qoir_private_size_t_result;
 
 // -------- Status Messages
 
@@ -199,6 +207,8 @@ const char qoir_status_message__error_out_of_memory[] =  //
     "#qoir: out of memory";
 const char qoir_status_message__error_unsupported_pixbuf[] =  //
     "#qoir: unsupported pixbuf";
+const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
+    "#qoir: unsupported pixbuf dimensions";
 const char qoir_status_message__error_unsupported_pixfmt[] =  //
     "#qoir: unsupported pixfmt";
 
@@ -346,6 +356,109 @@ qoir_decode(                          //
   return result;
 }
 
+static qoir_private_size_t_result  //
+qoir_private_encode_tile(          //
+    uint8_t* dst_ptr,              //
+    qoir_pixel_buffer* src_pixbuf) {
+  qoir_private_size_t_result result = {0};
+
+  uint32_t run_length = 0;
+  // TODO: support src pixfmt values other than RGB and RGBA_NONPREMUL.
+  bool src_has_alpha =
+      qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt) == 4;
+  // The array-of-four-uint8_t elements are in R, G, B, A order.
+  uint8_t color_cache[64][4] = {0};
+  uint8_t pixel[4] = {0};
+  uint8_t prev[4] = {0};
+  prev[3] = 0xFF;
+
+  // TODO: src pixbuf isn't always tightly packed (so stride != width * bpp).
+  uint8_t* dp = dst_ptr;
+  const uint8_t* sp = src_pixbuf->data;
+  const uint8_t* sq = src_pixbuf->data + (src_pixbuf->pixcfg.height_in_pixels *
+                                          src_pixbuf->stride_in_bytes);
+  while (sp < sq) {
+    if (src_has_alpha) {
+      memcpy(pixel, sp, 4);
+    } else {
+      memcpy(pixel, sp, 3);
+    }
+
+    if (!memcmp(pixel, prev, 4)) {
+      run_length++;
+      if (run_length == 62) {  // QOI_OP_RUN
+        *dp++ = (uint8_t)(run_length + 0xBF);
+        run_length = 0;
+      }
+
+    } else {
+      if (run_length > 0) {  // QOI_OP_RUN
+        *dp++ = (uint8_t)(run_length + 0xBF);
+        run_length = 0;
+      }
+
+      uint32_t hash = qoir_private_hash(pixel);
+      if (!memcmp(color_cache[hash], pixel, 4)) {  // QOI_OP_INDEX
+        *dp++ = (uint8_t)(hash | 0x00);
+
+      } else {
+        memcpy(color_cache[hash], pixel, 4);
+        if (pixel[3] == prev[3]) {
+          int8_t delta_r = (int8_t)(pixel[0] - prev[0]);
+          int8_t delta_g = (int8_t)(pixel[1] - prev[1]);
+          int8_t delta_b = (int8_t)(pixel[2] - prev[2]);
+          int8_t green_r = (int8_t)((uint8_t)delta_r - (uint8_t)delta_g);
+          int8_t green_b = (int8_t)((uint8_t)delta_b - (uint8_t)delta_g);
+
+          if ((-0x02 <= delta_r) && (delta_r < 0x02) &&  // QOI_OP_DIFF
+              (-0x02 <= delta_g) && (delta_g < 0x02) &&  //
+              (-0x02 <= delta_b) && (delta_b < 0x02)) {
+            *dp++ = 0x40 |                             //
+                    (((uint8_t)(delta_r + 2)) << 4) |  //
+                    (((uint8_t)(delta_g + 2)) << 2) |  //
+                    (((uint8_t)(delta_b + 2)) << 0);
+
+          } else if ((-0x08 <= green_r) && (green_r < 0x08) &&  // QOI_OP_LUMA
+                     (-0x20 <= delta_g) && (delta_g < 0x20) &&  //
+                     (-0x08 <= green_b) && (green_b < 0x08)) {
+            *dp++ = 0x80 | ((uint8_t)(delta_g + 0x20));
+            *dp++ = (((uint8_t)(green_r + 0x08)) << 4) |  //
+                    (((uint8_t)(green_b + 0x08)) << 0);
+
+          } else {  // QOI_OP_RGB
+            *dp++ = 0xFE;
+            *dp++ = pixel[0];
+            *dp++ = pixel[1];
+            *dp++ = pixel[2];
+          }
+
+        } else {  // QOI_OP_RGBA
+          *dp++ = 0xFF;
+          *dp++ = pixel[0];
+          *dp++ = pixel[1];
+          *dp++ = pixel[2];
+          *dp++ = pixel[3];
+        }
+      }
+    }
+
+    memcpy(prev, pixel, 4);
+    if (src_has_alpha) {
+      sp += 4;
+    } else {
+      sp += 3;
+    }
+  }
+
+  if (run_length > 0) {  // QOI_OP_RUN
+    *dp++ = (uint8_t)(run_length + 0xBF);
+    run_length = 0;
+  }
+
+  result.value = (size_t)(dp - dst_ptr);
+  return result;
+}
+
 QOIR_MAYBE_STATIC qoir_encode_result  //
 qoir_encode(                          //
     qoir_pixel_buffer* src_pixbuf,    //
@@ -354,36 +467,72 @@ qoir_encode(                          //
   if (!src_pixbuf) {
     result.status_message = qoir_status_message__error_invalid_argument;
     return result;
+  } else if ((src_pixbuf->pixcfg.width_in_pixels > 0xFFFFFF) ||
+             (src_pixbuf->pixcfg.height_in_pixels > 0xFFFFFF)) {
+    result.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    return result;
   }
-  qoi_desc desc;
-  desc.width = src_pixbuf->pixcfg.width_in_pixels;
-  desc.height = src_pixbuf->pixcfg.height_in_pixels;
-  desc.channels = 0;
-  desc.colorspace = QOI_SRGB;
 
+  uint32_t num_channels = 0;
   switch (src_pixbuf->pixcfg.pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
-      desc.channels = 3;
+      num_channels = 3;
       break;
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-      desc.channels = 4;
+      num_channels = 4;
       break;
     default:
       result.status_message = qoir_status_message__error_unsupported_pixfmt;
       return result;
   }
 
-  if (src_pixbuf->stride_in_bytes !=
-      ((size_t)desc.channels * src_pixbuf->pixcfg.width_in_pixels)) {
+  uint64_t w = src_pixbuf->pixcfg.width_in_pixels;
+  uint64_t h = src_pixbuf->pixcfg.height_in_pixels;
+  if (src_pixbuf->stride_in_bytes != (num_channels * w)) {
     result.status_message = qoir_status_message__error_unsupported_pixbuf;
     return result;
   }
-  int encoded_qoi_len = 0;
-  void* encoded_qoi_ptr = qoi_encode(src_pixbuf->data, &desc, &encoded_qoi_len);
 
-  result.owned_memory = encoded_qoi_ptr;
-  result.dst_ptr = encoded_qoi_ptr;
-  result.dst_len = encoded_qoi_len;
+  uint64_t dst_len_worst_case =
+      22 +          // Header (14 bytes) + footer (8 bytes).
+      (5 * w * h);  // Worst case, every pixel is QOI_OP_RGBA (5 bytes).
+  if (dst_len_worst_case > SIZE_MAX) {
+    result.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    return result;
+  }
+  uint8_t* dst_ptr = malloc((size_t)dst_len_worst_case);
+  if (!dst_ptr) {
+    result.status_message = qoir_status_message__error_out_of_memory;
+    return result;
+  }
+
+  // Header.
+  qoir_private_poke_u32be(dst_ptr + 0, 0x716F6966);
+  qoir_private_poke_u32be(dst_ptr + 4, src_pixbuf->pixcfg.width_in_pixels);
+  qoir_private_poke_u32be(dst_ptr + 8, src_pixbuf->pixcfg.height_in_pixels);
+  dst_ptr[12] = (uint8_t)num_channels;
+  dst_ptr[13] = 0x00;  // TODO: sRGB vs linear (vs other) color space.
+
+  // Payload.
+  qoir_private_size_t_result r =
+      qoir_private_encode_tile(dst_ptr + 14, src_pixbuf);
+  if (r.status_message) {
+    result.status_message = r.status_message;
+    free(dst_ptr);
+    return result;
+  }
+
+  // Footer: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01].
+  uint8_t* dp = dst_ptr + 14 + r.value;
+  for (uint8_t i = 0; i < 8; i++) {
+    *dp++ = (i + 1) >> 3;
+  }
+
+  result.owned_memory = dst_ptr;
+  result.dst_ptr = dst_ptr;
+  result.dst_len = 22 + r.value;
   return result;
 }
 
