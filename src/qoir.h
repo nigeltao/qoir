@@ -325,22 +325,6 @@ typedef void (*qoir_private_swizzle_func)(  //
     size_t height_in_pixels);
 
 static void                                //
-qoir_private_swizzle__copy_3(              //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  size_t n = 3 * width_in_pixels;
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    memcpy(dst_ptr, src_ptr, n);
-    dst_ptr += dst_stride_in_bytes;
-    src_ptr += src_stride_in_bytes;
-  }
-}
-
-static void                                //
 qoir_private_swizzle__copy_4(              //
     uint8_t* QOIR_RESTRICT dst_ptr,        //
     size_t dst_stride_in_bytes,            //
@@ -353,6 +337,46 @@ qoir_private_swizzle__copy_4(              //
     memcpy(dst_ptr, src_ptr, n);
     dst_ptr += dst_stride_in_bytes;
     src_ptr += src_stride_in_bytes;
+  }
+}
+
+static void                                //
+qoir_private_swizzle__rgb__rgba(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      *dst_ptr++ = *src_ptr++;
+      *dst_ptr++ = *src_ptr++;
+      *dst_ptr++ = *src_ptr++;
+      src_ptr++;
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__rgba__rgb(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      *dst_ptr++ = *src_ptr++;
+      *dst_ptr++ = *src_ptr++;
+      *dst_ptr++ = *src_ptr++;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
   }
 }
 
@@ -369,12 +393,9 @@ qoir_decode_pixel_configuration(                          //
 
 static const char*                  //
 qoir_private_decode_tile(           //
-    qoir_pixel_format dst_pixfmt,   //
+    uint8_t* dst_data,              //
     uint32_t dst_width_in_pixels,   //
     uint32_t dst_height_in_pixels,  //
-    uint8_t* dst_data,              //
-    size_t dst_stride_in_bytes,     //
-    qoir_pixel_format src_pixfmt,   //
     const uint8_t* src_ptr,         //
     size_t src_len) {
   // Callers should pass (opcode_stream_length + 8) so that the decode loop can
@@ -384,8 +405,6 @@ qoir_private_decode_tile(           //
   }
 
   uint32_t run_length = 0;
-  // TODO: support dst pixfmt values other than RGB and RGBA_NONPREMUL.
-  bool dst_has_alpha = qoir_pixel_format__bytes_per_pixel(dst_pixfmt) == 4;
   // The array-of-four-uint8_t elements are in R, G, B, A order.
   uint8_t color_cache[64][4] = {0};
   uint8_t pixel[4] = {0};
@@ -393,7 +412,7 @@ qoir_private_decode_tile(           //
 
   // TODO: dst pixbuf isn't always tightly packed (so stride != width * bpp).
   uint8_t* dp = dst_data;
-  uint8_t* dq = dst_data + (dst_height_in_pixels * dst_stride_in_bytes);
+  uint8_t* dq = dst_data + (4 * dst_width_in_pixels * dst_height_in_pixels);
   const uint8_t* sp = src_ptr;
   const uint8_t* sq = src_ptr + src_len - 8;
   while (dp < dq) {
@@ -440,13 +459,8 @@ qoir_private_decode_tile(           //
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
     }
 
-    if (dst_has_alpha) {
-      memcpy(dp, pixel, 4);
-      dp += 4;
-    } else {
-      memcpy(dp, pixel, 3);
-      dp += 3;
-    }
+    memcpy(dp, pixel, 4);
+    dp += 4;
   }
 
   return NULL;
@@ -476,7 +490,7 @@ qoir_private_decode_qpix_payload(   //
   qoir_private_swizzle_func swizzle = NULL;
   switch (dst_pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
-      swizzle = qoir_private_swizzle__copy_3;
+      swizzle = qoir_private_swizzle__rgb__rgba;
       break;
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
       swizzle = qoir_private_swizzle__copy_4;
@@ -484,7 +498,7 @@ qoir_private_decode_qpix_payload(   //
     default:
       return qoir_status_message__error_unsupported_pixfmt;
   }
-  size_t num_channels = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+  size_t num_dst_channels = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
 
   // ty, tx, tw and th are the tile's top-left offset, width and height, all
   // measured in pixels.
@@ -505,9 +519,8 @@ qoir_private_decode_qpix_payload(   //
       }
 
       const char* status_message = qoir_private_decode_tile(
-          dst_pixfmt, (uint32_t)tw, (uint32_t)th, decbuf->private_impl.rgba,
-          num_channels * tw, src_pixfmt, src_ptr,
-          tile_len + 8);  // See § for +8.
+          decbuf->private_impl.rgba, (uint32_t)tw, (uint32_t)th,  //
+          src_ptr, tile_len + 8);  // See § for +8.
       if (status_message) {
         return status_message;
       }
@@ -515,9 +528,10 @@ qoir_private_decode_qpix_payload(   //
       src_ptr += tile_len;
       src_len -= tile_len;
 
-      uint8_t* dp = dst_data + (dst_stride_in_bytes * ty) + (num_channels * tx);
-      (*swizzle)(dp, dst_stride_in_bytes,                       //
-                 decbuf->private_impl.rgba, num_channels * tw,  //
+      uint8_t* dp =
+          dst_data + (dst_stride_in_bytes * ty) + (num_dst_channels * tx);
+      (*swizzle)(dp, dst_stride_in_bytes,            //
+                 decbuf->private_impl.rgba, 4 * tw,  //
                  tw, th);
     }
   }
@@ -672,13 +686,12 @@ fail_invalid_data:
 static qoir_private_size_t_result  //
 qoir_private_encode_tile(          //
     uint8_t* dst_ptr,              //
-    qoir_pixel_buffer* src_pixbuf) {
+    const uint8_t* src_data,       //
+    uint32_t src_width_in_pixels,  //
+    uint32_t src_height_in_pixels) {
   qoir_private_size_t_result result = {0};
 
   uint32_t run_length = 0;
-  // TODO: support src pixfmt values other than RGB and RGBA_NONPREMUL.
-  bool src_has_alpha =
-      qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt) == 4;
   // The array-of-four-uint8_t elements are in R, G, B, A order.
   uint8_t color_cache[64][4] = {0};
   uint8_t pixel[4] = {0};
@@ -687,15 +700,11 @@ qoir_private_encode_tile(          //
 
   // TODO: src pixbuf isn't always tightly packed (so stride != width * bpp).
   uint8_t* dp = dst_ptr;
-  const uint8_t* sp = src_pixbuf->data;
-  const uint8_t* sq = src_pixbuf->data + (src_pixbuf->pixcfg.height_in_pixels *
-                                          src_pixbuf->stride_in_bytes);
+  const uint8_t* sp = src_data;
+  const uint8_t* sq =
+      src_data + (4 * src_width_in_pixels * src_height_in_pixels);
   while (sp < sq) {
-    if (src_has_alpha) {
-      memcpy(pixel, sp, 4);
-    } else {
-      memcpy(pixel, sp, 3);
-    }
+    memcpy(pixel, sp, 4);
 
     if (!memcmp(pixel, prev, 4)) {
       run_length++;
@@ -756,11 +765,7 @@ qoir_private_encode_tile(          //
     }
 
     memcpy(prev, pixel, 4);
-    if (src_has_alpha) {
-      sp += 4;
-    } else {
-      sp += 3;
-    }
+    sp += 4;
   }
 
   if (run_length > 0) {  // QOI_OP_RUN
@@ -792,7 +797,7 @@ qoir_private_encode_qpix_payload(  //
   qoir_private_swizzle_func swizzle = NULL;
   switch (src_pixbuf->pixcfg.pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
-      swizzle = qoir_private_swizzle__copy_3;
+      swizzle = qoir_private_swizzle__rgba__rgb;
       break;
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
       swizzle = qoir_private_swizzle__copy_4;
@@ -801,7 +806,7 @@ qoir_private_encode_qpix_payload(  //
       result.status_message = qoir_status_message__error_unsupported_pixfmt;
       return result;
   }
-  size_t num_channels =
+  size_t num_src_channels =
       qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
   uint8_t* dp = dst_ptr;
 
@@ -816,19 +821,13 @@ qoir_private_encode_qpix_payload(  //
 
       const uint8_t* sp = src_pixbuf->data +
                           (src_pixbuf->stride_in_bytes * ty) +
-                          (num_channels * tx);
-      (*swizzle)(encbuf->private_impl.rgba, num_channels * tw,  //
-                 sp, src_pixbuf->stride_in_bytes,               //
+                          (num_src_channels * tx);
+      (*swizzle)(encbuf->private_impl.rgba, 4 * tw,  //
+                 sp, src_pixbuf->stride_in_bytes,    //
                  tw, th);
 
-      qoir_pixel_buffer enc_pixbuf;
-      enc_pixbuf.pixcfg.pixfmt = src_pixbuf->pixcfg.pixfmt;
-      enc_pixbuf.pixcfg.width_in_pixels = tw;
-      enc_pixbuf.pixcfg.height_in_pixels = th;
-      enc_pixbuf.data = encbuf->private_impl.rgba;
-      enc_pixbuf.stride_in_bytes = num_channels * tw;
       qoir_private_size_t_result r =
-          qoir_private_encode_tile(dp + 4, &enc_pixbuf);
+          qoir_private_encode_tile(dp + 4, encbuf->private_impl.rgba, tw, th);
       if (r.status_message) {
         result.status_message = r.status_message;
         return r;
