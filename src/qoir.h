@@ -152,6 +152,13 @@ typedef struct qoir_decode_result_struct {
 } qoir_decode_result;
 
 typedef struct qoir_decode_options_struct {
+  // Custom malloc/free implementations. NULL etc_func pointers means to use
+  // the standard malloc and free functions. Non-NULL etc_func pointers will be
+  // passed the memory_func_context.
+  void* (*contextual_malloc_func)(void* memory_func_context, size_t len);
+  void (*contextual_free_func)(void* memory_func_context, void* ptr);
+  void* memory_func_context;
+
   qoir_decode_buffer* decbuf;
   qoir_pixel_format pixfmt;
 } qoir_decode_options;
@@ -178,6 +185,13 @@ typedef struct qoir_encode_result_struct {
 } qoir_encode_result;
 
 typedef struct qoir_encode_options_struct {
+  // Custom malloc/free implementations. NULL etc_func pointers means to use
+  // the standard malloc and free functions. Non-NULL etc_func pointers will be
+  // passed the memory_func_context.
+  void* (*contextual_malloc_func)(void* memory_func_context, size_t len);
+  void (*contextual_free_func)(void* memory_func_context, void* ptr);
+  void* memory_func_context;
+
   qoir_encode_buffer* encbuf;
 } qoir_encode_options;
 
@@ -296,6 +310,37 @@ typedef struct qoir_private_size_t_result_struct {
   const char* status_message;
   size_t value;
 } qoir_private_size_t_result;
+
+// -------- Memory Management
+
+#define QOIR_MALLOC(len)                                                \
+  qoir_private_malloc(options ? options->contextual_malloc_func : NULL, \
+                      options ? options->memory_func_context : NULL, len)
+
+#define QOIR_FREE(ptr)                                              \
+  qoir_private_free(options ? options->contextual_free_func : NULL, \
+                    options ? options->memory_func_context : NULL, ptr)
+
+static inline void*                                                  //
+qoir_private_malloc(void* (*contextual_malloc_func)(void*, size_t),  //
+                    void* memory_func_context,                       //
+                    size_t len) {
+  if (contextual_malloc_func) {
+    return (*contextual_malloc_func)(memory_func_context, len);
+  }
+  return malloc(len);
+}
+
+static inline void                                             //
+qoir_private_free(void (*contextual_free_func)(void*, void*),  //
+                  void* memory_func_context,                   //
+                  void* ptr) {
+  if (contextual_free_func) {
+    (*contextual_free_func)(memory_func_context, ptr);
+    return;
+  }
+  free(ptr);
+}
 
 // -------- Status Messages
 
@@ -639,7 +684,7 @@ qoir_decode(                          //
         return result;
 
       } else if (pixbuf_len > 0) {
-        pixbuf_data = malloc((size_t)pixbuf_len);
+        pixbuf_data = QOIR_MALLOC((size_t)pixbuf_len);
         if (!pixbuf_data) {
           result.status_message = qoir_status_message__error_out_of_memory;
           return result;
@@ -647,10 +692,10 @@ qoir_decode(                          //
         qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
         bool free_decbuf = false;
         if (!decbuf) {
-          decbuf = (qoir_decode_buffer*)malloc(sizeof(qoir_decode_buffer));
+          decbuf = (qoir_decode_buffer*)QOIR_MALLOC(sizeof(qoir_decode_buffer));
           if (!decbuf) {
             result.status_message = qoir_status_message__error_out_of_memory;
-            free(pixbuf_data);
+            QOIR_FREE(pixbuf_data);
             return result;
           }
           free_decbuf = true;
@@ -660,11 +705,11 @@ qoir_decode(                          //
             dst_width_in_bytes, src_pixfmt, sp,
             payload_length + 8);  // See § for +8.
         if (free_decbuf) {
-          free(decbuf);
+          QOIR_FREE(decbuf);
         }
         if (status_message) {
           result.status_message = status_message;
-          free(pixbuf_data);
+          QOIR_FREE(pixbuf_data);
           return result;
         }
 
@@ -691,7 +736,7 @@ qoir_decode(                          //
 
 fail_invalid_data:
   result.status_message = qoir_status_message__error_invalid_data;
-  free(pixbuf_data);
+  QOIR_FREE(pixbuf_data);
   return result;
 }
 
@@ -918,7 +963,7 @@ qoir_encode(                          //
         qoir_status_message__error_unsupported_pixbuf_dimensions;
     return result;
   }
-  uint8_t* dst_ptr = malloc((size_t)dst_len_worst_case);
+  uint8_t* dst_ptr = QOIR_MALLOC((size_t)dst_len_worst_case);
   if (!dst_ptr) {
     result.status_message = qoir_status_message__error_out_of_memory;
     return result;
@@ -937,10 +982,10 @@ qoir_encode(                          //
   qoir_encode_buffer* encbuf = options ? options->encbuf : NULL;
   bool free_encbuf = false;
   if (!encbuf) {
-    encbuf = (qoir_encode_buffer*)malloc(sizeof(qoir_encode_buffer));
+    encbuf = (qoir_encode_buffer*)QOIR_MALLOC(sizeof(qoir_encode_buffer));
     if (!encbuf) {
       result.status_message = qoir_status_message__error_out_of_memory;
-      free(dst_ptr);
+      QOIR_FREE(dst_ptr);
       return result;
     }
     free_encbuf = true;
@@ -948,16 +993,16 @@ qoir_encode(                          //
   qoir_private_size_t_result r =
       qoir_private_encode_qpix_payload(encbuf, dst_ptr + 32, src_pixbuf);
   if (free_encbuf) {
-    free(encbuf);
+    QOIR_FREE(encbuf);
   }
   if (r.status_message) {
     result.status_message = r.status_message;
-    free(dst_ptr);
+    QOIR_FREE(dst_ptr);
     return result;
   } else if ((uint64_t)r.value > 0x7FFFFFFFFFFFFFFFull) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
-    free(dst_ptr);
+    QOIR_FREE(dst_ptr);
     return result;
   }
   qoir_private_poke_u64le(dst_ptr + 24, r.value);
@@ -974,6 +1019,8 @@ qoir_encode(                          //
 
 // --------
 
+#undef QOIR_FREE
+#undef QOIR_MALLOC
 #undef QOIR_RESTRICT
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 
