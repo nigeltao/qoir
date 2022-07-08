@@ -57,6 +57,13 @@ extern "C" {
 #define QOIR_MAYBE_STATIC
 #endif  // defined(QOIR_CONFIG__STATIC_FUNCTIONS)
 
+// -------- Basic Result Types
+
+typedef struct qoir_size_result_struct {
+  const char* status_message;
+  size_t value;
+} qoir_size_result;
+
 // -------- Status Messages
 
 extern const char qoir_status_message__error_invalid_argument[];
@@ -318,11 +325,6 @@ qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
   return interior ? QOIR_TILE_SIZE
                   : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
 }
-
-typedef struct qoir_private_size_t_result_struct {
-  const char* status_message;
-  size_t value;
-} qoir_private_size_t_result;
 
 // -------- Memory Management
 
@@ -784,13 +786,13 @@ fail_invalid_data:
 
 // -------- QOIR Encode
 
-static qoir_private_size_t_result  //
+static qoir_size_result            //
 qoir_private_encode_tile_opcodes(  //
     uint8_t* dst_ptr,              //
     const uint8_t* src_data,       //
     uint32_t src_width_in_pixels,  //
     uint32_t src_height_in_pixels) {
-  qoir_private_size_t_result result = {0};
+  qoir_size_result result = {0};
 
   uint32_t run_length = 0;
   // The array-of-four-uint8_t elements are in R, G, B, A order.
@@ -877,12 +879,12 @@ qoir_private_encode_tile_opcodes(  //
   return result;
 }
 
-static qoir_private_size_t_result  //
+static qoir_size_result            //
 qoir_private_encode_qpix_payload(  //
     qoir_encode_buffer* encbuf,    //
     uint8_t* dst_ptr,              //
     qoir_pixel_buffer* src_pixbuf) {
-  qoir_private_size_t_result result = {0};
+  qoir_size_result result = {0};
 
   size_t height_in_tiles =
       (src_pixbuf->pixcfg.height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
@@ -926,7 +928,7 @@ qoir_private_encode_qpix_payload(  //
                  sp, src_pixbuf->stride_in_bytes,        //
                  tw, th);
 
-      qoir_private_size_t_result r = qoir_private_encode_tile_opcodes(
+      qoir_size_result r = qoir_private_encode_tile_opcodes(
           encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
       size_t literals_len = 4 * tw * th;
       if (r.status_message) {
@@ -1044,7 +1046,7 @@ qoir_encode(                          //
     }
     free_encbuf = true;
   }
-  qoir_private_size_t_result r =
+  qoir_size_result r =
       qoir_private_encode_qpix_payload(encbuf, dst_ptr + 32, src_pixbuf);
   if (free_encbuf) {
     QOIR_FREE(encbuf);
