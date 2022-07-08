@@ -42,9 +42,16 @@ in the natural order (the same as pixels: left-to-right and top-to-bottom).
 A tile's encoding consists of a 4 byte prefix:
 
 - 3 byte EncodedTileLength.
-- 1 byte reserved.
+- 1 byte EncodedTileFormat
 
-After the prefix are EncodedTileLength bytes of pixel opcodes (similar to QOI
-opcodes). This is the 'meat' of the format.
+After the prefix are EncodedTileLength bytes whose interpretation depends on
+the EncodedTileFormat:
+
+- 0x00 "Literals tile format" means that the encoded tile bytes are literally
+  uncompressed RGBA values.
+- 0x01 "Opcodes tile format" means that the encoded tile bytes are pixel
+  opcodes (similar to QOI opcodes). This is the 'meat' of the format.
+- Other values are valid (for forward compatibility) but the decoder should
+  reject them as unsupported.
 
 TODO: add more details.
