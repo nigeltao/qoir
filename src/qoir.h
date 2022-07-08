@@ -455,7 +455,6 @@ qoir_private_decode_tile_opcodes(   //
   uint8_t pixel[4] = {0};
   pixel[3] = 0xFF;
 
-  // TODO: dst pixbuf isn't always tightly packed (so stride != width * bpp).
   uint8_t* dp = dst_data;
   uint8_t* dq = dst_data + (4 * dst_width_in_pixels * dst_height_in_pixels);
   const uint8_t* sp = src_ptr;
@@ -757,7 +756,6 @@ qoir_private_encode_tile_opcodes(  //
   uint8_t prev[4] = {0};
   prev[3] = 0xFF;
 
-  // TODO: src pixbuf isn't always tightly packed (so stride != width * bpp).
   uint8_t* dp = dst_ptr;
   const uint8_t* sp = src_data;
   const uint8_t* sq =
