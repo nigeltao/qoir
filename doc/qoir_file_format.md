@@ -41,17 +41,31 @@ in the natural order (the same as pixels: left-to-right and top-to-bottom).
 
 A tile's encoding consists of a 4 byte prefix:
 
-- 3 byte EncodedTileLength.
+- 3 byte EncodedTileLength. Values above 0x10000 = 65536 are invalid unless the
+  high bit of the EncodedTileFormat is set. None of the currently supported
+  EncodedTileFormat values have that high bit set, but future versions might
+  use this.
 - 1 byte EncodedTileFormat
 
 After the prefix are EncodedTileLength bytes whose interpretation depends on
 the EncodedTileFormat:
 
 - 0x00 "Literals tile format" means that the encoded tile bytes are literally
-  uncompressed RGBA values.
+  RGBA values (with no compression).
 - 0x01 "Opcodes tile format" means that the encoded tile bytes are pixel
-  opcodes (similar to QOI opcodes). This is the 'meat' of the format.
-- Other values are valid (for forward compatibility) but the decoder should
-  reject them as unsupported.
+  opcodes (see below).
+- 0x02 "LZ4-Literals tile format" means that the encoded tile bytes are LZ4
+  compressed. The decompressed bytes are like the "Literals tile format".
+- 0x03 "LZ4-Opcodes tile format" means that the encoded tile bytes are LZ4
+  compressed. The decompressed bytes are like the "Opcodes tile format".
+- Other values are valid (for forward compatibility) but decoders should reject
+  them as unsupported.
+
+LZ4 specifically means [LZ4 block
+compression](https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md). When
+used in QOIR encoded tiles, a decompressed size above 65536 is invalid.
+
+
+## Pixel Opcodes
 
 TODO: add more details.

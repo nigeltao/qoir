@@ -26,6 +26,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+// TODO: remove the dependency.
+#include <lz4.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -127,6 +130,9 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 #define QOIR_TILE_SIZE 0x80
 #define QOIR_TILE_SHIFT 7
 
+// QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
+#define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
+
 // -------- QOIR Decode
 
 typedef struct qoir_decode_pixel_configuration_result_struct {
@@ -141,7 +147,10 @@ qoir_decode_pixel_configuration(                          //
 
 typedef struct qoir_decode_buffer_struct {
   struct {
-    uint8_t rgba[4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE];
+    // opcodes has to be before literals, so that (worst case) we can read (and
+    // ignore) 8 bytes past the end of the opcodes array. See §
+    uint8_t opcodes[4 * QOIR_TS2];
+    uint8_t literals[4 * QOIR_TS2];
   } private_impl;
 } qoir_decode_buffer;
 
@@ -173,7 +182,11 @@ qoir_decode(                          //
 
 typedef struct qoir_encode_buffer_struct {
   struct {
-    uint8_t rgba[4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE];
+    // opcodes' size is (5 * QOIR_TS2), not (4 * QOIR_TS2), because in the
+    // worst case (during encoding, before discarding the too-long opcodes in
+    // favor of literals), each pixel uses QOI_OP_RGBA, 5 bytes each.
+    uint8_t opcodes[5 * QOIR_TS2];
+    uint8_t literals[4 * QOIR_TS2];
   } private_impl;
 } qoir_encode_buffer;
 
@@ -558,27 +571,57 @@ qoir_private_decode_qpix_payload(   //
       src_ptr += 4;
       src_len -= 4;
       size_t tile_len = prefix & 0xFFFFFF;
-      if (src_len < (tile_len + 8)) {
+      if ((src_len < (tile_len + 8)) ||  //
+          (((4 * QOIR_TS2) < tile_len) && ((prefix >> 31) != 0))) {
         return qoir_status_message__error_invalid_data;
       }
 
-      const uint8_t* rgba = NULL;
+      const uint8_t* literals = NULL;
       switch (prefix >> 24) {
         case 0: {  // Literals tile format.
           if (tile_len != (4 * tw * th)) {
             return qoir_status_message__error_invalid_data;
           }
-          rgba = src_ptr;
+          literals = src_ptr;
           break;
         }
         case 1: {  // Opcodes tile format.
           const char* status_message = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.rgba, (uint32_t)tw, (uint32_t)th,  //
+              decbuf->private_impl.literals, (uint32_t)tw, (uint32_t)th,  //
               src_ptr, tile_len + 8);  // See § for +8.
           if (status_message) {
             return status_message;
           }
-          rgba = decbuf->private_impl.rgba;
+          literals = decbuf->private_impl.literals;
+          break;
+        }
+        case 2: {  // LZ4-Literals tile format.
+          int n = LZ4_decompress_safe((const char*)src_ptr,                  //
+                                      (char*)decbuf->private_impl.literals,  //
+                                      tile_len,                              //
+                                      sizeof(decbuf->private_impl.literals));
+          if (n < 0) {
+            return qoir_status_message__error_invalid_data;
+          }
+          literals = decbuf->private_impl.literals;
+          break;
+        }
+        case 3: {  // LZ4-Opcodes tile format.
+          int n = LZ4_decompress_safe((const char*)src_ptr,                 //
+                                      (char*)decbuf->private_impl.opcodes,  //
+                                      tile_len,                             //
+                                      sizeof(decbuf->private_impl.opcodes));
+          if (n < 0) {
+            return qoir_status_message__error_invalid_data;
+          }
+          const char* status_message = qoir_private_decode_tile_opcodes(
+              decbuf->private_impl.literals,         //
+              (uint32_t)tw, (uint32_t)th,            //
+              decbuf->private_impl.opcodes, n + 8);  // See § for +8.
+          if (status_message) {
+            return status_message;
+          }
+          literals = decbuf->private_impl.literals;
           break;
         }
         default:
@@ -590,7 +633,7 @@ qoir_private_decode_qpix_payload(   //
 
       uint8_t* dp =
           dst_data + (dst_stride_in_bytes * ty) + (num_dst_channels * tx);
-      (*swizzle)(dp, dst_stride_in_bytes, rgba, 4 * tw, tw, th);
+      (*swizzle)(dp, dst_stride_in_bytes, literals, 4 * tw, tw, th);
     }
   }
 
@@ -879,30 +922,44 @@ qoir_private_encode_qpix_payload(  //
       const uint8_t* sp = src_pixbuf->data +
                           (src_pixbuf->stride_in_bytes * ty) +
                           (num_src_channels * tx);
-      (*swizzle)(encbuf->private_impl.rgba, 4 * tw,  //
-                 sp, src_pixbuf->stride_in_bytes,    //
+      (*swizzle)(encbuf->private_impl.literals, 4 * tw,  //
+                 sp, src_pixbuf->stride_in_bytes,        //
                  tw, th);
 
-      // qoir_private_encode_tile_opcodes can (temporarily) write up to (5 *
-      // QOIR_TILE_SIZE * QOIR_TILE_SIZE) bytes, since QOI_OP_RGBA is 5 bytes,
-      // but we use the Literals tile format if its shorter, worst case is (4 *
-      // QTS * QTS). The difference, ((5 - 4) * QTS * QTS), is pre-allocated by
-      // the caller as extra 'scratch space'.  Reference: †
       qoir_private_size_t_result r = qoir_private_encode_tile_opcodes(
-          dp + 4, encbuf->private_impl.rgba, tw, th);
+          encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
+      size_t literals_len = 4 * tw * th;
       if (r.status_message) {
         result.status_message = r.status_message;
         return r;
-      } else if (r.value >= (4 * tw * th)) {
-        // Use the Literals tile format.
-        size_t n = 4 * tw * th;
-        memcpy(dp + 4, encbuf->private_impl.rgba, n);
-        qoir_private_poke_u32le(dp, (uint32_t)n);
-        dp += 4 + n;
+
+      } else if (r.value >= literals_len) {
+        // Use the Literals or LZ4-Literals tile format.
+        int n = LZ4_compress_default(
+            ((const char*)(encbuf->private_impl.literals)), ((char*)(dp + 4)),
+            (int)literals_len, 4 * QOIR_TS2);
+        if ((0 < n) && (n < literals_len)) {
+          qoir_private_poke_u32le(dp, 0x02000000 | (uint32_t)n);
+          dp += 4 + n;
+        } else {
+          memcpy(dp + 4, encbuf->private_impl.literals, literals_len);
+          qoir_private_poke_u32le(dp, 0x00000000 | (uint32_t)literals_len);
+          dp += 4 + literals_len;
+        }
+
       } else {
-        // Use the Opcodes tile format.
-        qoir_private_poke_u32le(dp, ((uint32_t)(r.value | 0x01000000)));
-        dp += 4 + r.value;
+        // Use the Opcodes or LZ4-Opcodes tile format.
+        int n =
+            LZ4_compress_default(((const char*)(encbuf->private_impl.opcodes)),
+                                 ((char*)(dp + 4)), (int)r.value, 4 * QOIR_TS2);
+        if ((0 < n) && (n < r.value)) {
+          qoir_private_poke_u32le(dp, 0x03000000 | (uint32_t)n);
+          dp += 4 + n;
+        } else {
+          memcpy(dp + 4, encbuf->private_impl.opcodes, r.value);
+          qoir_private_poke_u32le(dp, 0x01000000 | (uint32_t)r.value);
+          dp += 4 + r.value;
+        }
       }
     }
   }
@@ -950,12 +1007,11 @@ qoir_encode(                          //
   uint64_t height_in_tiles =
       (src_pixbuf->pixcfg.height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
   uint64_t tile_len_worst_case =
-      4 + (4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE);  // Prefix + literal format.
+      4 + (4 * QOIR_TS2);  // Prefix + literal format.
   uint64_t dst_len_worst_case =
       (width_in_tiles * height_in_tiles * tile_len_worst_case) +
-      44 +  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
-            // QOIR also has an 8 byte payload.
-      (QOIR_TILE_SIZE * QOIR_TILE_SIZE);  // See †.
+      44;  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
+           // QOIR also has an 8 byte payload.
   if (dst_len_worst_case > SIZE_MAX) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
