@@ -120,7 +120,7 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
   return (pixfmt & 0x10) ? 3 : 4;
 }
 
-// -------- QOIR Decode / Encode
+// -------- QOIR Decode
 
 typedef struct qoir_decode_pixel_configuration_result_struct {
   const char* status_message;
@@ -132,6 +132,12 @@ qoir_decode_pixel_configuration(                          //
     uint8_t* src_ptr,                                     //
     size_t src_len);
 
+typedef struct qoir_decode_buffer_struct {
+  struct {
+    uint8_t todo;
+  } private_impl;
+} qoir_decode_buffer;
+
 typedef struct qoir_decode_result_struct {
   const char* status_message;
   void* owned_memory;
@@ -139,6 +145,7 @@ typedef struct qoir_decode_result_struct {
 } qoir_decode_result;
 
 typedef struct qoir_decode_options_struct {
+  qoir_decode_buffer* decbuf;
   qoir_pixel_format pixfmt;
 } qoir_decode_options;
 
@@ -148,6 +155,14 @@ qoir_decode(                          //
     size_t src_len,                   //
     qoir_decode_options* options);
 
+// -------- QOIR Encode
+
+typedef struct qoir_encode_buffer_struct {
+  struct {
+    uint8_t todo;
+  } private_impl;
+} qoir_encode_buffer;
+
 typedef struct qoir_encode_result_struct {
   const char* status_message;
   void* owned_memory;
@@ -156,7 +171,7 @@ typedef struct qoir_encode_result_struct {
 } qoir_encode_result;
 
 typedef struct qoir_encode_options_struct {
-  uint32_t todo;
+  qoir_encode_buffer* encbuf;
 } qoir_encode_options;
 
 QOIR_MAYBE_STATIC qoir_encode_result  //
@@ -277,7 +292,16 @@ const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
 const char qoir_status_message__error_unsupported_pixfmt[] =  //
     "#qoir: unsupported pixfmt";
 
-// -------- QOIR Decode / Encode
+// -------- QOIR Decode
+
+QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
+qoir_decode_pixel_configuration(                          //
+    uint8_t* src_ptr,                                     //
+    size_t src_len) {
+  qoir_decode_pixel_configuration_result result = {0};
+  result.status_message = "#TODO";
+  return result;
+}
 
 static const char*                  //
 qoir_private_decode_tile(           //
@@ -362,13 +386,20 @@ qoir_private_decode_tile(           //
   return NULL;
 }
 
-QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
-qoir_decode_pixel_configuration(                          //
-    uint8_t* src_ptr,                                     //
+static const char*                  //
+qoir_private_decode_qpix_payload(   //
+    qoir_decode_buffer* decbuf,     //
+    qoir_pixel_format dst_pixfmt,   //
+    uint32_t dst_width_in_pixels,   //
+    uint32_t dst_height_in_pixels,  //
+    uint8_t* dst_data,              //
+    size_t dst_stride_in_bytes,     //
+    qoir_pixel_format src_pixfmt,   //
+    const uint8_t* src_ptr,         //
     size_t src_len) {
-  qoir_decode_pixel_configuration_result result = {0};
-  result.status_message = "#TODO";
-  return result;
+  return qoir_private_decode_tile(
+      dst_pixfmt, dst_width_in_pixels, dst_height_in_pixels, dst_data,
+      dst_stride_in_bytes, src_pixfmt, src_ptr, src_len);
 }
 
 QOIR_MAYBE_STATIC qoir_decode_result  //
@@ -451,22 +482,38 @@ qoir_decode(                          //
         result.status_message =
             qoir_status_message__error_unsupported_pixbuf_dimensions;
         return result;
+
       } else if (pixbuf_len > 0) {
         pixbuf_data = malloc((size_t)pixbuf_len);
         if (!pixbuf_data) {
           result.status_message = qoir_status_message__error_out_of_memory;
           return result;
         }
+        qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
+        bool free_decbuf = false;
+        if (!decbuf) {
+          decbuf = (qoir_decode_buffer*)malloc(sizeof(qoir_decode_buffer));
+          if (!decbuf) {
+            result.status_message = qoir_status_message__error_out_of_memory;
+            free(pixbuf_data);
+            return result;
+          }
+          free_decbuf = true;
+        }
         // Pass (payload_length + 8) so that opcode decoding can always peek
         // for 8 bytes, even at the end of the opcode stream.
-        const char* status_message = qoir_private_decode_tile(
-            dst_pixfmt, width_in_pixels, height_in_pixels, pixbuf_data,
+        const char* status_message = qoir_private_decode_qpix_payload(
+            decbuf, dst_pixfmt, width_in_pixels, height_in_pixels, pixbuf_data,
             dst_width_in_bytes, src_pixfmt, sp, payload_length + 8);
+        if (free_decbuf) {
+          free(decbuf);
+        }
         if (status_message) {
           result.status_message = status_message;
           free(pixbuf_data);
           return result;
         }
+
       } else if (payload_length != 0) {
         goto fail_invalid_data;
       }
@@ -493,6 +540,8 @@ fail_invalid_data:
   free(pixbuf_data);
   return result;
 }
+
+// -------- QOIR Encode
 
 static qoir_private_size_t_result  //
 qoir_private_encode_tile(          //
@@ -597,6 +646,23 @@ qoir_private_encode_tile(          //
   return result;
 }
 
+static qoir_private_size_t_result  //
+qoir_private_encode_qpix_payload(  //
+    qoir_encode_buffer* encbuf,    //
+    uint8_t* dst_ptr,              //
+    qoir_pixel_buffer* src_pixbuf) {
+  qoir_private_size_t_result result = {0};
+
+  qoir_private_size_t_result r = qoir_private_encode_tile(dst_ptr, src_pixbuf);
+  if (r.status_message) {
+    result.status_message = r.status_message;
+    return r;
+  }
+
+  result.value = r.value;
+  return result;
+}
+
 QOIR_MAYBE_STATIC qoir_encode_result  //
 qoir_encode(                          //
     qoir_pixel_buffer* src_pixbuf,    //
@@ -657,8 +723,22 @@ qoir_encode(                          //
 
   // QPIX chunk.
   qoir_private_poke_u32le(dst_ptr + 20, 0x58495051);  // "QPIX"le.
+  qoir_encode_buffer* encbuf = options ? options->encbuf : NULL;
+  bool free_encbuf = false;
+  if (!encbuf) {
+    encbuf = (qoir_encode_buffer*)malloc(sizeof(qoir_encode_buffer));
+    if (!encbuf) {
+      result.status_message = qoir_status_message__error_out_of_memory;
+      free(dst_ptr);
+      return result;
+    }
+    free_encbuf = true;
+  }
   qoir_private_size_t_result r =
-      qoir_private_encode_tile(dst_ptr + 32, src_pixbuf);
+      qoir_private_encode_qpix_payload(encbuf, dst_ptr + 32, src_pixbuf);
+  if (free_encbuf) {
+    free(encbuf);
+  }
   if (r.status_message) {
     result.status_message = r.status_message;
     free(dst_ptr);

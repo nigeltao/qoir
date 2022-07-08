@@ -31,6 +31,8 @@
 // ----
 
 int g_number_of_reps;
+qoir_decode_buffer g_decbuf;
+qoir_encode_buffer g_encbuf;
 
 typedef struct timings_struct {
   uint64_t original_size;
@@ -49,8 +51,8 @@ print_timings(timings* t,
   double cratio = t->compressed_size / ((double)(t->original_size));
   double espeed = t->encode_pixels / ((double)(t->encode_micros));
   double dspeed = t->decode_pixels / ((double)(t->decode_micros));
-  printf("QOIR    %6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
-         cratio, espeed, dspeed, name0, name1, name2);
+  printf("%s%6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
+         "QOIR    ", cratio, espeed, dspeed, name0, name1, name2);
 }
 
 typedef struct my_context_struct {
@@ -64,7 +66,9 @@ bench_one_pixbuf(my_context* z,
                  const char* dirname,
                  const char* filename,
                  qoir_pixel_buffer* src_pixbuf) {
-  qoir_encode_result enc = qoir_encode(src_pixbuf, NULL);
+  qoir_encode_options encopts = {0};
+  encopts.encbuf = &g_encbuf;
+  qoir_encode_result enc = qoir_encode(src_pixbuf, &encopts);
   if (enc.status_message) {
     printf("%s%s%s: could not encode QOIR\n", z->benchname, dirname, filename);
     free(enc.owned_memory);
@@ -86,7 +90,7 @@ bench_one_pixbuf(my_context* z,
     struct timeval timeval0;
     gettimeofday(&timeval0, NULL);
     for (int i = 0; i < g_number_of_reps; i++) {
-      free(qoir_encode(src_pixbuf, NULL).owned_memory);
+      free(qoir_encode(src_pixbuf, &encopts).owned_memory);
     }
     struct timeval timeval1;
     gettimeofday(&timeval1, NULL);
@@ -99,7 +103,9 @@ bench_one_pixbuf(my_context* z,
     }
   }
 
-  qoir_decode_result dec = qoir_decode(enc.dst_ptr, enc.dst_len, NULL);
+  qoir_decode_options decopts = {0};
+  decopts.decbuf = &g_decbuf;
+  qoir_decode_result dec = qoir_decode(enc.dst_ptr, enc.dst_len, &decopts);
   free(dec.owned_memory);
   if (dec.status_message) {
     printf("%s%s%s: could not decode QOIR\n", z->benchname, dirname, filename);
@@ -111,7 +117,7 @@ bench_one_pixbuf(my_context* z,
     struct timeval timeval0;
     gettimeofday(&timeval0, NULL);
     for (int i = 0; i < g_number_of_reps; i++) {
-      free(qoir_decode(enc.dst_ptr, enc.dst_len, NULL).owned_memory);
+      free(qoir_decode(enc.dst_ptr, enc.dst_len, &decopts).owned_memory);
     }
     struct timeval timeval1;
     gettimeofday(&timeval1, NULL);
