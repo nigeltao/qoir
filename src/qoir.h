@@ -120,6 +120,12 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
   return (pixfmt & 0x10) ? 3 : 4;
 }
 
+// -------- File Format Constants
+
+#define QOIR_TILE_MASK 0x7F
+#define QOIR_TILE_SIZE 0x80
+#define QOIR_TILE_SHIFT 7
+
 // -------- QOIR Decode
 
 typedef struct qoir_decode_pixel_configuration_result_struct {
@@ -134,7 +140,7 @@ qoir_decode_pixel_configuration(                          //
 
 typedef struct qoir_decode_buffer_struct {
   struct {
-    uint8_t todo;
+    uint8_t rgba[4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE];
   } private_impl;
 } qoir_decode_buffer;
 
@@ -159,7 +165,7 @@ qoir_decode(                          //
 
 typedef struct qoir_encode_buffer_struct {
   struct {
-    uint8_t todo;
+    uint8_t rgba[4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE];
   } private_impl;
 } qoir_encode_buffer;
 
@@ -208,6 +214,13 @@ qoir_encode(                          //
 #if defined(_MSC_VER) && !defined(__clang__) && \
     (defined(_M_ARM64) || defined(_M_X64))
 #define QOIR_USE_MEMCPY_LE_PEEK_POKE
+#endif
+
+// Clang also #define's "__GNUC__".
+#if defined(__GNUC__) || defined(_MSC_VER)
+#define QOIR_RESTRICT __restrict
+#else
+#define QOIR_RESTRICT
 #endif
 
 static inline uint32_t  //
@@ -272,6 +285,12 @@ qoir_private_hash(const uint8_t* p) {
                (0x0B * (uint32_t)p[3]));
 }
 
+static inline uint32_t  //
+qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
+  return interior ? QOIR_TILE_SIZE
+                  : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
+}
+
 typedef struct qoir_private_size_t_result_struct {
   const char* status_message;
   size_t value;
@@ -291,6 +310,51 @@ const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
     "#qoir: unsupported pixbuf dimensions";
 const char qoir_status_message__error_unsupported_pixfmt[] =  //
     "#qoir: unsupported pixfmt";
+
+const char qoir_status_message__internal_error_could_not_encode_tile[] =  //
+    "#qoir: internal error: could not encode tile";
+
+// -------- Pixel Swizzlers
+
+typedef void (*qoir_private_swizzle_func)(  //
+    uint8_t* QOIR_RESTRICT dst_ptr,         //
+    size_t dst_stride_in_bytes,             //
+    const uint8_t* QOIR_RESTRICT src_ptr,   //
+    size_t src_stride_in_bytes,             //
+    size_t width_in_pixels,                 //
+    size_t height_in_pixels);
+
+static void                                //
+qoir_private_swizzle__copy_3(              //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  size_t n = 3 * width_in_pixels;
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    memcpy(dst_ptr, src_ptr, n);
+    dst_ptr += dst_stride_in_bytes;
+    src_ptr += src_stride_in_bytes;
+  }
+}
+
+static void                                //
+qoir_private_swizzle__copy_4(              //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  size_t n = 4 * width_in_pixels;
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    memcpy(dst_ptr, src_ptr, n);
+    dst_ptr += dst_stride_in_bytes;
+    src_ptr += src_stride_in_bytes;
+  }
+}
 
 // -------- QOIR Decode
 
@@ -313,6 +377,8 @@ qoir_private_decode_tile(           //
     qoir_pixel_format src_pixfmt,   //
     const uint8_t* src_ptr,         //
     size_t src_len) {
+  // Callers should pass (opcode_stream_length + 8) so that the decode loop can
+  // always peek for 8 bytes, even at the end of the stream. Reference: §
   if (src_len < 8) {
     return qoir_status_message__error_invalid_data;
   }
@@ -397,9 +463,70 @@ qoir_private_decode_qpix_payload(   //
     qoir_pixel_format src_pixfmt,   //
     const uint8_t* src_ptr,         //
     size_t src_len) {
-  return qoir_private_decode_tile(
-      dst_pixfmt, dst_width_in_pixels, dst_height_in_pixels, dst_data,
-      dst_stride_in_bytes, src_pixfmt, src_ptr, src_len);
+  size_t height_in_tiles =
+      (dst_height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  size_t width_in_tiles =
+      (dst_width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
+    goto done;
+  }
+  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
+  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
+
+  qoir_private_swizzle_func swizzle = NULL;
+  switch (dst_pixfmt) {
+    case QOIR_PIXEL_FORMAT__RGB:
+      swizzle = qoir_private_swizzle__copy_3;
+      break;
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+      swizzle = qoir_private_swizzle__copy_4;
+      break;
+    default:
+      return qoir_status_message__error_unsupported_pixfmt;
+  }
+  size_t num_channels = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+
+  // ty, tx, tw and th are the tile's top-left offset, width and height, all
+  // measured in pixels.
+  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
+    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
+      size_t tw = qoir_private_tile_dimension(tx < tx1, dst_width_in_pixels);
+      size_t th = qoir_private_tile_dimension(ty < ty1, dst_height_in_pixels);
+
+      if (src_len < 4) {
+        return qoir_status_message__error_invalid_data;
+      }
+      uint32_t prefix = qoir_private_peek_u32le(src_ptr);
+      src_ptr += 4;
+      src_len -= 4;
+      size_t tile_len = prefix & 0xFFFFFF;
+      if (src_len < (tile_len + 8)) {
+        return qoir_status_message__error_invalid_data;
+      }
+
+      const char* status_message = qoir_private_decode_tile(
+          dst_pixfmt, (uint32_t)tw, (uint32_t)th, decbuf->private_impl.rgba,
+          num_channels * tw, src_pixfmt, src_ptr,
+          tile_len + 8);  // See § for +8.
+      if (status_message) {
+        return status_message;
+      }
+
+      src_ptr += tile_len;
+      src_len -= tile_len;
+
+      uint8_t* dp = dst_data + (dst_stride_in_bytes * ty) + (num_channels * tx);
+      (*swizzle)(dp, dst_stride_in_bytes,                       //
+                 decbuf->private_impl.rgba, num_channels * tw,  //
+                 tw, th);
+    }
+  }
+
+done:
+  if (src_len != 8) {
+    return qoir_status_message__error_invalid_data;
+  }
+  return NULL;
 }
 
 QOIR_MAYBE_STATIC qoir_decode_result  //
@@ -500,11 +627,10 @@ qoir_decode(                          //
           }
           free_decbuf = true;
         }
-        // Pass (payload_length + 8) so that opcode decoding can always peek
-        // for 8 bytes, even at the end of the opcode stream.
         const char* status_message = qoir_private_decode_qpix_payload(
             decbuf, dst_pixfmt, width_in_pixels, height_in_pixels, pixbuf_data,
-            dst_width_in_bytes, src_pixfmt, sp, payload_length + 8);
+            dst_width_in_bytes, src_pixfmt, sp,
+            payload_length + 8);  // See § for +8.
         if (free_decbuf) {
           free(decbuf);
         }
@@ -653,13 +779,70 @@ qoir_private_encode_qpix_payload(  //
     qoir_pixel_buffer* src_pixbuf) {
   qoir_private_size_t_result result = {0};
 
-  qoir_private_size_t_result r = qoir_private_encode_tile(dst_ptr, src_pixbuf);
-  if (r.status_message) {
-    result.status_message = r.status_message;
-    return r;
+  size_t height_in_tiles =
+      (src_pixbuf->pixcfg.height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  size_t width_in_tiles =
+      (src_pixbuf->pixcfg.width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
+    return result;
+  }
+  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
+  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
+
+  qoir_private_swizzle_func swizzle = NULL;
+  switch (src_pixbuf->pixcfg.pixfmt) {
+    case QOIR_PIXEL_FORMAT__RGB:
+      swizzle = qoir_private_swizzle__copy_3;
+      break;
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+      swizzle = qoir_private_swizzle__copy_4;
+      break;
+    default:
+      result.status_message = qoir_status_message__error_unsupported_pixfmt;
+      return result;
+  }
+  size_t num_channels =
+      qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
+  uint8_t* dp = dst_ptr;
+
+  // ty, tx, tw and th are the tile's top-left offset, width and height, all
+  // measured in pixels.
+  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
+    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
+      size_t tw = qoir_private_tile_dimension(
+          tx < tx1, src_pixbuf->pixcfg.width_in_pixels);
+      size_t th = qoir_private_tile_dimension(
+          ty < ty1, src_pixbuf->pixcfg.height_in_pixels);
+
+      const uint8_t* sp = src_pixbuf->data +
+                          (src_pixbuf->stride_in_bytes * ty) +
+                          (num_channels * tx);
+      (*swizzle)(encbuf->private_impl.rgba, num_channels * tw,  //
+                 sp, src_pixbuf->stride_in_bytes,               //
+                 tw, th);
+
+      qoir_pixel_buffer enc_pixbuf;
+      enc_pixbuf.pixcfg.pixfmt = src_pixbuf->pixcfg.pixfmt;
+      enc_pixbuf.pixcfg.width_in_pixels = tw;
+      enc_pixbuf.pixcfg.height_in_pixels = th;
+      enc_pixbuf.data = encbuf->private_impl.rgba;
+      enc_pixbuf.stride_in_bytes = num_channels * tw;
+      qoir_private_size_t_result r =
+          qoir_private_encode_tile(dp + 4, &enc_pixbuf);
+      if (r.status_message) {
+        result.status_message = r.status_message;
+        return r;
+      } else if (r.value > 0xFFFFFF) {
+        result.status_message =
+            qoir_status_message__internal_error_could_not_encode_tile;
+        return r;
+      }
+      qoir_private_poke_u32le(dp, (uint32_t)r.value);
+      dp += 4 + r.value;
+    }
   }
 
-  result.value = r.value;
+  result.value = (size_t)(dp - dst_ptr);
   return result;
 }
 
@@ -691,17 +874,24 @@ qoir_encode(                          //
       return result;
   }
 
-  uint64_t w = src_pixbuf->pixcfg.width_in_pixels;
-  uint64_t h = src_pixbuf->pixcfg.height_in_pixels;
-  if (src_pixbuf->stride_in_bytes != (num_channels * w)) {
+  if (src_pixbuf->stride_in_bytes !=
+      ((uint64_t)num_channels * src_pixbuf->pixcfg.width_in_pixels)) {
     result.status_message = qoir_status_message__error_unsupported_pixbuf;
     return result;
   }
 
+  uint64_t width_in_tiles =
+      (src_pixbuf->pixcfg.width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  uint64_t height_in_tiles =
+      (src_pixbuf->pixcfg.height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  uint64_t tile_len_worst_case =
+      (5 * QOIR_TILE_SIZE *
+       QOIR_TILE_SIZE) +  // Worst case, every pixel is QOI_OP_RGBA (5 bytes),
+      4;                  // plus 4 bytes for the length prefix.
   uint64_t dst_len_worst_case =
-      (5 * w * h) +  // Worst case, every pixel is QOI_OP_RGBA (5 bytes).
-      44;            // QOIR, QPIX, QEND chunk headers are 12 bytes each.
-                     // QOIR also has an 8 byte payload.
+      (width_in_tiles * height_in_tiles * tile_len_worst_case) +
+      44;  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
+           // QOIR also has an 8 byte payload.
   if (dst_len_worst_case > SIZE_MAX) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
@@ -763,6 +953,7 @@ qoir_encode(                          //
 
 // --------
 
+#undef QOIR_RESTRICT
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 
 // ================================ -Private Implementation

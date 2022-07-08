@@ -1,14 +1,13 @@
 # QOIR File Format
 
-QOIR is a sequence of chunks:
+QOIR is an unpadded sequence of chunks:
 
 - 1 QOIR chunk.
 - 1 or more other (non-QOIR, non-QEND) chunks. These other chunks must contain
   exactly 1 QPIX chunk.
 - 1 QEND chunk.
 
-Each chunk has a 12 byte header and a variable length payload. There is no
-padding between chunks. The header:
+Each chunk has a 12 byte header and a variable length payload. The header:
 
 - 4 byte ChunkType (e.g. "EXIF", "ICCP", "QEND", "QOIR", "QPIX", "XMP ").
 - 8 byte PayloadLength. All QOIR integers are stored unsigned and little
@@ -35,7 +34,17 @@ The PayloadLength must be 0.
 
 ## QPIX chunk.
 
-The minimum PayloadLength is 0. The payload contains pixel opcodes (similar to
-QOI opcodes). This is the 'meat' of the format.
+The minimum PayloadLength is 0. The payload contains an unpadded sequence of
+encoded tiles. Each tile can be decoded independently, measures 128 x 128
+pixels (although the right and bottom tiles might be smaller) and are presented
+in the natural order (the same as pixels: left-to-right and top-to-bottom).
+
+A tile's encoding consists of a 4 byte prefix:
+
+- 3 byte EncodedTileLength.
+- 1 byte reserved.
+
+After the prefix are EncodedTileLength bytes of pixel opcodes (similar to QOI
+opcodes). This is the 'meat' of the format.
 
 TODO: add more details.
