@@ -1041,10 +1041,10 @@ qoir_decode(                          //
     result.status_message = qoir_status_message__error_invalid_data;
     return result;
   }
-  uint64_t qoir_chunk_payload_length = qoir_private_peek_u64le(src_ptr + 4);
-  if ((qoir_chunk_payload_length < 8) ||
-      (qoir_chunk_payload_length > 0x7FFFFFFFFFFFFFFFull) ||
-      (qoir_chunk_payload_length > (src_len - 44))) {
+  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
+  if ((qoir_chunk_payload_len < 8) ||
+      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
+      (qoir_chunk_payload_len > (src_len - 44))) {
     result.status_message = qoir_status_message__error_invalid_data;
     return result;
   }
@@ -1071,15 +1071,15 @@ qoir_decode(                          //
       width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
 
   bool seen_qpix = false;
-  const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_length);
-  size_t sn = src_len - (12 + qoir_chunk_payload_length);
+  const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_len);
+  size_t sn = src_len - (12 + qoir_chunk_payload_len);
   while (1) {
     if (sn < 12) {
       goto fail_invalid_data;
     }
     uint32_t chunk_type = qoir_private_peek_u32le(sp + 0);
-    uint64_t payload_length = qoir_private_peek_u64le(sp + 4);
-    if (payload_length > 0x7FFFFFFFFFFFFFFFull) {
+    uint64_t payload_len = qoir_private_peek_u64le(sp + 4);
+    if (payload_len > 0x7FFFFFFFFFFFFFFFull) {
       goto fail_invalid_data;
     }
     sp += 12;
@@ -1088,14 +1088,14 @@ qoir_decode(                          //
     if (chunk_type == 0x52494F51) {  // "QOIR"le.
       goto fail_invalid_data;
     } else if (chunk_type == 0x444E4551) {  // "QEND"le.
-      if ((payload_length != 0) || (sn != 0)) {
+      if ((payload_len != 0) || (sn != 0)) {
         goto fail_invalid_data;
       }
       break;
     }
 
     // This chunk must be followed by at least the QEND chunk (12 bytes).
-    if ((sn < payload_length) || ((sn - payload_length) < 12)) {
+    if ((sn < payload_len) || ((sn - payload_len) < 12)) {
       goto fail_invalid_data;
     }
 
@@ -1131,7 +1131,7 @@ qoir_decode(                          //
         const char* status_message = qoir_private_decode_qpix_payload(
             decbuf, dst_pixfmt, width_in_pixels, height_in_pixels, pixbuf_data,
             dst_width_in_bytes, src_pixfmt, sp,
-            payload_length + 8);  // See § for +8.
+            payload_len + 8);  // See § for +8.
         if (free_decbuf) {
           QOIR_FREE(decbuf);
         }
@@ -1141,13 +1141,13 @@ qoir_decode(                          //
           return result;
         }
 
-      } else if (payload_length != 0) {
+      } else if (payload_len != 0) {
         goto fail_invalid_data;
       }
     }
 
-    sp += payload_length;
-    sn -= payload_length;
+    sp += payload_len;
+    sn -= payload_len;
   }
 
   if (!seen_qpix) {
