@@ -71,9 +71,14 @@ used in QOIR encoded tiles, a decompressed size above 65536 is invalid.
 TODO: add more details.
 
     i=index, r=red, g=green, b=blue, a=alpha, s=r-g, c=b-g, n=run_length
-    QOIR_OP_INDEX  00iiiiii
-    QOIR_OP_DIFF   01rrggbb
-    QOIR_OP_LUMA   10gggggg sssscccc
-    QOIR_OP_RUN    11nnnnnn
-    QOIR_OP_RGB    11111110 rrrrrrrr gggggggg bbbbbbbb
-    QOIR_OP_RGBA   11111111 rrrrrrrr gggggggg bbbbbbbb aaaaaaaa
+    QOIR_OP_INDEX  iiiiii00
+    QOIR_OP_RGB2   bbggrr01
+    QOIR_OP_LUMA   gggggg10 ccccssss
+    QOIR_OP_RGB7   rrrrr011 ggggggrr bbbbbbbg
+    QOIR_OP_RUNS   nnnnn111
+    QOIR_OP_RUNL   11010111 nnnnnnnn
+    QOIR_OP_RGBA2  11011111 aabbggrr
+    QOIR_OP_RGBA4  11100111 ggggrrrr aaaabbbb
+    QOIR_OP_RGBA8  11101111 rrrrrrrr gggggggg bbbbbbbb aaaaaaaa
+    QOIR_OP_RGB8   11110111 rrrrrrrr gggggggg bbbbbbbb
+    QOIR_OP_A8     11111111 aaaaaaaa

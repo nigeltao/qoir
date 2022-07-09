@@ -262,10 +262,12 @@ qoir_decode(                          //
 
 typedef struct qoir_encode_buffer_struct {
   struct {
-    // opcodes' size is (5 * QOIR_TS2), not (4 * QOIR_TS2), because in the
-    // worst case (during encoding, before discarding the too-long opcodes in
-    // favor of literals), each pixel uses QOI_OP_RGBA, 5 bytes each.
-    uint8_t opcodes[5 * QOIR_TS2];
+    // opcodes' size is ((5 * QOIR_TS2) + 64), not (4 * QOIR_TS2), because in
+    // the worst case (during encoding, before discarding the too-long opcodes
+    // in favor of literals), each pixel uses QOIR_OP_RGBA8, 5 bytes each. The
+    // +64 is for the same reason as §, but the +8 is rounded up to a multiple
+    // of a typical cache line size.
+    uint8_t opcodes[(5 * QOIR_TS2) + 64];
     uint8_t literals[4 * QOIR_TS2];
   } private_impl;
 } qoir_encode_buffer;
@@ -890,37 +892,41 @@ qoir_private_decode_tile_opcodes(  //
 
     } else if (sp < sq) {
       uint8_t s0 = *sp++;
-      if (s0 == 0xFE) {  // QOI_OP_RGB
+      if (s0 == 0xF7) {  // QOIR_OP_RGB8
         pixel[0] = *sp++;
         pixel[1] = *sp++;
         pixel[2] = *sp++;
-      } else if (s0 == 0xFF) {  // QOI_OP_RGBA
+      } else if (s0 == 0xEF) {  // QOIR_OP_RGBA8
         pixel[0] = *sp++;
         pixel[1] = *sp++;
         pixel[2] = *sp++;
         pixel[3] = *sp++;
       } else {
-        switch (s0 >> 6) {
-          case 0: {  // QOI_OP_INDEX
-            memcpy(pixel, color_cache[s0], 4);
+        switch (s0 & 0x03) {
+          case 0: {  // QOIR_OP_INDEX
+            memcpy(pixel, color_cache[s0 >> 2], 4);
             break;
           }
-          case 1: {  // QOI_OP_DIFF
-            pixel[0] += ((s0 >> 4) & 0x03) - 2;
-            pixel[1] += ((s0 >> 2) & 0x03) - 2;
-            pixel[2] += ((s0 >> 0) & 0x03) - 2;
+          case 1: {  // QOIR_OP_RGB2
+            pixel[0] += ((s0 >> 2) & 0x03) - 2;
+            pixel[1] += ((s0 >> 4) & 0x03) - 2;
+            pixel[2] += ((s0 >> 6) & 0x03) - 2;
             break;
           }
-          case 2: {  // QOI_OP_LUMA
+          case 2: {  // QOIR_OP_LUMA
             uint8_t s1 = *sp++;
-            uint8_t delta_g = (s0 & 0x3F) - 32;
-            pixel[0] += delta_g - 8 + (s1 >> 4);
+            uint8_t delta_g = (s0 >> 2) - 32;
+            pixel[0] += delta_g - 8 + (s1 & 0x0F);
             pixel[1] += delta_g;
-            pixel[2] += delta_g - 8 + (s1 & 0x0F);
+            pixel[2] += delta_g - 8 + (s1 >> 4);
             break;
           }
-          case 3: {  // QOI_OP_RUN
-            run_length = s0 & 0x3F;
+          case 3: {
+            if (s0 == 0xD7) {  // QOIR_OP_RUNL
+              run_length = *sp++;
+            } else {
+              run_length = s0 >> 3;
+            }
             break;
           }
         }
@@ -1224,20 +1230,27 @@ qoir_private_encode_tile_opcodes(  //
 
     if (!memcmp(pixel, prev, 4)) {
       run_length++;
-      if (run_length == 62) {  // QOI_OP_RUN
-        *dp++ = (uint8_t)(run_length + 0xBF);
+      if (run_length == 256) {
+        *dp++ = 0xD7;  // QOIR_OP_RUNL
+        *dp++ = 0xFF;
         run_length = 0;
       }
 
     } else {
-      if (run_length > 0) {  // QOI_OP_RUN
-        *dp++ = (uint8_t)(run_length + 0xBF);
-        run_length = 0;
+      if (run_length > 0) {
+        if (run_length <= 26) {
+          *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 3));  // QOIR_OP_RUNS
+          run_length = 0;
+        } else {
+          *dp++ = 0xD7;  // QOIR_OP_RUNL
+          *dp++ = (uint8_t)(run_length - 1);
+          run_length = 0;
+        }
       }
 
       uint32_t hash = qoir_private_hash(pixel);
-      if (!memcmp(color_cache[hash], pixel, 4)) {  // QOI_OP_INDEX
-        *dp++ = (uint8_t)(hash | 0x00);
+      if (!memcmp(color_cache[hash], pixel, 4)) {
+        *dp++ = (uint8_t)(0x00 | (hash << 2));  // QOIR_OP_INDEX
 
       } else {
         memcpy(color_cache[hash], pixel, 4);
@@ -1248,30 +1261,30 @@ qoir_private_encode_tile_opcodes(  //
           int8_t green_r = (int8_t)((uint8_t)delta_r - (uint8_t)delta_g);
           int8_t green_b = (int8_t)((uint8_t)delta_b - (uint8_t)delta_g);
 
-          if ((-0x02 <= delta_r) && (delta_r < 0x02) &&  // QOI_OP_DIFF
+          if ((-0x02 <= delta_r) && (delta_r < 0x02) &&  //
               (-0x02 <= delta_g) && (delta_g < 0x02) &&  //
               (-0x02 <= delta_b) && (delta_b < 0x02)) {
-            *dp++ = 0x40 |                             //
-                    (((uint8_t)(delta_r + 2)) << 4) |  //
-                    (((uint8_t)(delta_g + 2)) << 2) |  //
-                    (((uint8_t)(delta_b + 2)) << 0);
+            *dp++ = 0x01 |                             // QOIR_OP_RGB2
+                    (((uint8_t)(delta_r + 2)) << 2) |  //
+                    (((uint8_t)(delta_g + 2)) << 4) |  //
+                    (((uint8_t)(delta_b + 2)) << 6);
 
-          } else if ((-0x08 <= green_r) && (green_r < 0x08) &&  // QOI_OP_LUMA
+          } else if ((-0x08 <= green_r) && (green_r < 0x08) &&  //
                      (-0x20 <= delta_g) && (delta_g < 0x20) &&  //
                      (-0x08 <= green_b) && (green_b < 0x08)) {
-            *dp++ = 0x80 | ((uint8_t)(delta_g + 0x20));
-            *dp++ = (((uint8_t)(green_r + 0x08)) << 4) |  //
-                    (((uint8_t)(green_b + 0x08)) << 0);
+            *dp++ = 0x02 | (((uint8_t)(delta_g + 0x20)) << 2);  // QOIR_OP_LUMA
+            *dp++ = (((uint8_t)(green_r + 0x08)) << 0) |        //
+                    (((uint8_t)(green_b + 0x08)) << 4);
 
-          } else {  // QOI_OP_RGB
-            *dp++ = 0xFE;
+          } else {
+            *dp++ = 0xF7;  // QOIR_OP_RGB8
             *dp++ = pixel[0];
             *dp++ = pixel[1];
             *dp++ = pixel[2];
           }
 
-        } else {  // QOI_OP_RGBA
-          *dp++ = 0xFF;
+        } else {
+          *dp++ = 0xEF;  // QOIR_OP_RGBA8
           *dp++ = pixel[0];
           *dp++ = pixel[1];
           *dp++ = pixel[2];
@@ -1284,9 +1297,15 @@ qoir_private_encode_tile_opcodes(  //
     sp += 4;
   }
 
-  if (run_length > 0) {  // QOI_OP_RUN
-    *dp++ = (uint8_t)(run_length + 0xBF);
-    run_length = 0;
+  if (run_length > 0) {
+    if (run_length <= 26) {
+      *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 3));  // QOIR_OP_RUNS
+      run_length = 0;
+    } else {
+      *dp++ = 0xD7;  // QOIR_OP_RUNL
+      *dp++ = (uint8_t)(run_length - 1);
+      run_length = 0;
+    }
   }
 
   result.value = (size_t)(dp - dst_ptr);
