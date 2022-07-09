@@ -69,3 +69,11 @@ used in QOIR encoded tiles, a decompressed size above 65536 is invalid.
 ## Pixel Opcodes
 
 TODO: add more details.
+
+    i=index, r=red, g=green, b=blue, a=alpha, s=r-g, c=b-g, n=run_length
+    QOIR_OP_INDEX  00iiiiii
+    QOIR_OP_DIFF   01rrggbb
+    QOIR_OP_LUMA   10gggggg sssscccc
+    QOIR_OP_RUN    11nnnnnn
+    QOIR_OP_RGB    11111110 rrrrrrrr gggggggg bbbbbbbb
+    QOIR_OP_RGBA   11111111 rrrrrrrr gggggggg bbbbbbbb aaaaaaaa
