@@ -891,6 +891,7 @@ qoir_private_decode_tile_opcodes(  //
       run_length--;
 
     } else if (sp < sq) {
+      uint64_t s64 = qoir_private_peek_u64le(sp);
       uint8_t s0 = *sp++;
       if (s0 == 0xF7) {  // QOIR_OP_RGB8
         pixel[0] = *sp++;
@@ -922,7 +923,12 @@ qoir_private_decode_tile_opcodes(  //
             break;
           }
           case 3: {
-            if (s0 == 0xD7) {  // QOIR_OP_RUNL
+            if ((s0 & 0x04) == 0) {  // QOIR_OP_RGB7 given 0x03 bits are set.
+              pixel[0] += ((s64 >> 0x03u) & 0x7F) - 0x40;
+              pixel[1] += ((s64 >> 0x0Au) & 0x7F) - 0x40;
+              pixel[2] += ((s64 >> 0x11u) & 0x7F) - 0x40;
+              sp += 2;
+            } else if (s0 == 0xD7) {  // QOIR_OP_RUNL
               run_length = *sp++;
             } else {
               run_length = s0 >> 3;
@@ -1275,6 +1281,16 @@ qoir_private_encode_tile_opcodes(  //
             *dp++ = 0x02 | (((uint8_t)(delta_g + 0x20)) << 2);  // QOIR_OP_LUMA
             *dp++ = (((uint8_t)(green_r + 0x08)) << 0) |        //
                     (((uint8_t)(green_b + 0x08)) << 4);
+
+          } else if ((-0x40 <= delta_r) && (delta_r < 0x40) &&  //
+                     (-0x40 <= delta_g) && (delta_g < 0x40) &&  //
+                     (-0x40 <= delta_b) && (delta_b < 0x40)) {
+            qoir_private_poke_u32le(dp,
+                                    0x03 |  // QOIR_OP_RGB7
+                                        ((uint32_t)(delta_r + 0x40) << 0x03u) |
+                                        ((uint32_t)(delta_g + 0x40) << 0x0Au) |
+                                        ((uint32_t)(delta_b + 0x40) << 0x11u));
+            dp += 3;
 
           } else {
             *dp++ = 0xF7;  // QOIR_OP_RGB8
