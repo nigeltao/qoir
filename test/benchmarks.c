@@ -31,6 +31,7 @@
 // ----
 
 int g_number_of_reps;
+int g_verbose;
 qoir_decode_buffer g_decbuf;
 qoir_encode_buffer g_encbuf;
 
@@ -214,7 +215,7 @@ my_file_callback(void* context,
   if (!result) {
     memset(&z->timings[depth], 0, sizeof(z->timings[depth]));
     result = bench_one_png(z, depth, dirname, filename, r.dst_ptr, r.dst_len);
-    if (z->benchname[0] == '\x00') {
+    if (g_verbose || (z->benchname[0] == '\x00')) {
       print_timings(&z->timings[depth], z->benchname, dirname, filename);
     }
   }
@@ -256,6 +257,7 @@ benchmark(const char* src_filename) {
 int  //
 main(int argc, char** argv) {
   g_number_of_reps = 5;
+  g_verbose = 0;
 
   for (int i = 1; i < argc; i++) {
     if (*argv[i] != '-') {
@@ -271,11 +273,13 @@ main(int argc, char** argv) {
       arg++;
     }
 
-    if (!strncmp(arg, "reps=", 5)) {
-      int x = atoi(arg + 5);
+    if (!strncmp(arg, "n=", 2)) {
+      int x = atoi(arg + 2);
       if (x >= 0) {
         g_number_of_reps = x;
       }
+    } else if (!strncmp(arg, "v", 2)) {
+      g_verbose = 1;
     } else {
       printf("unsupported argument: %s\n", argv[i]);
       return 1;
