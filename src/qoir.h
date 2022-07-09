@@ -825,7 +825,37 @@ qoir_decode_pixel_configuration(                          //
     uint8_t* src_ptr,                                     //
     size_t src_len) {
   qoir_decode_pixel_configuration_result result = {0};
-  result.status_message = "#TODO";
+
+  if ((src_len < 20) ||
+      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
+    result.status_message = qoir_status_message__error_invalid_data;
+    return result;
+  }
+  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
+  if ((qoir_chunk_payload_len < 8) ||
+      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull)) {
+    result.status_message = qoir_status_message__error_invalid_data;
+    return result;
+  }
+
+  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
+  uint32_t width_in_pixels = 0xFFFFFF & header0;
+  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
+  switch (src_pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      break;
+    default:
+      result.status_message = qoir_status_message__error_invalid_data;
+      return result;
+  }
+  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
+  uint32_t height_in_pixels = 0xFFFFFF & header1;
+
+  result.dst_pixcfg.pixfmt = src_pixfmt;
+  result.dst_pixcfg.width_in_pixels = width_in_pixels;
+  result.dst_pixcfg.height_in_pixels = height_in_pixels;
   return result;
 }
 
