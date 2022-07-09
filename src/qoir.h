@@ -153,14 +153,41 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 // QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
 #define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
 
+// -------- LZ4 Decode
+
+// QOIR_LZ4_BLOCK_DECODE_MAX_INCL_SRC_LEN is the maximum (inclusive) supported
+// input length for this file's LZ4 decode functions. The LZ4 block format can
+// generally support longer inputs, but this implementation specifically is
+// more limited, to simplify overflow checking.
+//
+// With sufficiently large input, qoir_lz4_block_encode (note that that's
+// encode, not decode) may very well produce output that is longer than this.
+// That output is valid (in terms of the LZ4 file format) but isn't decodable
+// by qoir_lz4_block_decode.
+//
+// 0x00FFFFFF = 16777215, which is over 16 million bytes.
+#define QOIR_LZ4_BLOCK_DECODE_MAX_INCL_SRC_LEN 0x00FFFFFF
+
+// qoir_lz4_block_decode writes to dst the LZ4 block decompressed form of src,
+// returning the number of bytes written.
+//
+// It fails with qoir_lz4_status_message__error_dst_is_too_short if dst_len is
+// not long enough to hold the decompressed form.
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_decode(                     //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_len,                        //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_len);
+
 // -------- LZ4 Encode
 
 // QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN is the maximum (inclusive) supported
-// input length for this file's qoir_lz4_block_encode functions. The LZ4 block
-// format can generally support longer inputs, but this implementation
-// specifically is more limited, to simplify overflow checking.
+// input length for this file's LZ4 encode functions. The LZ4 block format can
+// generally support longer inputs, but this implementation specifically is
+// more limited, to simplify overflow checking.
 //
-// 0x7E000000 = 2113929216, which is over two billion bytes.
+// 0x7E000000 = 2113929216, which is over 2 billion bytes.
 #define QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN 0x7E000000
 
 // qoir_lz4_block_encode_worst_case_dst_len returns the maximum (inclusive)
@@ -173,7 +200,8 @@ qoir_lz4_block_encode_worst_case_dst_len(  //
 // returning the number of bytes written.
 //
 // Unlike the LZ4_compress_default function from the official implementation
-// (https://github.com/lz4/lz4), it fails immediately if dst_len is less than
+// (https://github.com/lz4/lz4), it fails immediately with
+// qoir_lz4_status_message__error_dst_is_too_short if dst_len is less than
 // qoir_lz4_block_encode_worst_case_dst_len(src_len), even if the worst case is
 // unrealized and the compressed form would actually fit.
 QOIR_MAYBE_STATIC qoir_size_result         //
@@ -485,6 +513,33 @@ qoir_private_swizzle__rgba__rgb(           //
     dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
     src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
   }
+}
+
+// -------- LZ4 Decode
+
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_decode(                     //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_len,                        //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_len) {
+  qoir_size_result result = {0};
+
+  if (src_len > QOIR_LZ4_BLOCK_DECODE_MAX_INCL_SRC_LEN) {
+    result.status_message = qoir_lz4_status_message__error_src_is_too_long;
+    return result;
+  }
+
+  int n =
+      LZ4_decompress_safe((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
+                          ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
+  if (n < 0) {
+    result.status_message = "#TODO: LZ4 decompression error";
+    return result;
+  }
+
+  result.value = n;
+  return result;
 }
 
 // -------- LZ4 Encode
@@ -847,28 +902,26 @@ qoir_private_decode_qpix_payload(   //
           break;
         }
         case 2: {  // LZ4-Literals tile format.
-          int n = LZ4_decompress_safe((const char*)src_ptr,                  //
-                                      (char*)decbuf->private_impl.literals,  //
-                                      tile_len,                              //
-                                      sizeof(decbuf->private_impl.literals));
-          if (n < 0) {
+          qoir_size_result r = qoir_lz4_block_decode(
+              decbuf->private_impl.literals,
+              sizeof(decbuf->private_impl.literals), src_ptr, tile_len);
+          if (r.status_message) {
             return qoir_status_message__error_invalid_data;
           }
           literals = decbuf->private_impl.literals;
           break;
         }
         case 3: {  // LZ4-Opcodes tile format.
-          int n = LZ4_decompress_safe((const char*)src_ptr,                 //
-                                      (char*)decbuf->private_impl.opcodes,  //
-                                      tile_len,                             //
-                                      sizeof(decbuf->private_impl.opcodes));
-          if (n < 0) {
+          qoir_size_result r = qoir_lz4_block_decode(
+              decbuf->private_impl.opcodes,
+              sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
+          if (r.status_message) {
             return qoir_status_message__error_invalid_data;
           }
           const char* status_message = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals,         //
-              (uint32_t)tw, (uint32_t)th,            //
-              decbuf->private_impl.opcodes, n + 8);  // See § for +8.
+              decbuf->private_impl.literals,               //
+              (uint32_t)tw, (uint32_t)th,                  //
+              decbuf->private_impl.opcodes, r.value + 8);  // See § for +8.
           if (status_message) {
             return status_message;
           }
