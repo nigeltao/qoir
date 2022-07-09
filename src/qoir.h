@@ -829,17 +829,19 @@ qoir_decode_pixel_configuration(                          //
   return result;
 }
 
-static const char*                  //
-qoir_private_decode_tile_opcodes(   //
-    uint8_t* dst_data,              //
-    uint32_t dst_width_in_pixels,   //
-    uint32_t dst_height_in_pixels,  //
-    const uint8_t* src_ptr,         //
+static qoir_size_result            //
+qoir_private_decode_tile_opcodes(  //
+    uint8_t* dst_ptr,              //
+    size_t dst_len,                //
+    const uint8_t* src_ptr,        //
     size_t src_len) {
+  qoir_size_result result = {0};
+
   // Callers should pass (opcode_stream_length + 8) so that the decode loop can
   // always peek for 8 bytes, even at the end of the stream. Reference: §
   if (src_len < 8) {
-    return qoir_status_message__error_invalid_data;
+    result.status_message = qoir_status_message__error_invalid_argument;
+    return result;
   }
 
   uint32_t run_length = 0;
@@ -848,8 +850,8 @@ qoir_private_decode_tile_opcodes(   //
   uint8_t pixel[4] = {0};
   pixel[3] = 0xFF;
 
-  uint8_t* dp = dst_data;
-  uint8_t* dq = dst_data + (4 * dst_width_in_pixels * dst_height_in_pixels);
+  uint8_t* dp = dst_ptr;
+  uint8_t* dq = dst_ptr + dst_len;
   const uint8_t* sp = src_ptr;
   const uint8_t* sq = src_ptr + src_len - 8;
   while (dp < dq) {
@@ -900,7 +902,8 @@ qoir_private_decode_tile_opcodes(   //
     dp += 4;
   }
 
-  return NULL;
+  result.value = (size_t)(dp - dst_ptr);
+  return result;
 }
 
 static const char*                  //
@@ -966,11 +969,13 @@ qoir_private_decode_qpix_payload(   //
           break;
         }
         case 1: {  // Opcodes tile format.
-          const char* status_message = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals, (uint32_t)tw, (uint32_t)th,  //
-              src_ptr, tile_len + 8);  // See § for +8.
-          if (status_message) {
-            return status_message;
+          qoir_size_result r = qoir_private_decode_tile_opcodes(
+              decbuf->private_impl.literals, 4 * tw * th,  //
+              src_ptr, tile_len + 8);                      // See § for +8.
+          if (r.status_message) {
+            return r.status_message;
+          } else if (r.value != (4 * tw * th)) {
+            return qoir_status_message__error_invalid_data;
           }
           literals = decbuf->private_impl.literals;
           break;
@@ -981,23 +986,26 @@ qoir_private_decode_qpix_payload(   //
               sizeof(decbuf->private_impl.literals), src_ptr, tile_len);
           if (r.status_message) {
             return qoir_status_message__error_invalid_data;
+          } else if (r.value != (4 * tw * th)) {
+            return qoir_status_message__error_invalid_data;
           }
           literals = decbuf->private_impl.literals;
           break;
         }
         case 3: {  // LZ4-Opcodes tile format.
-          qoir_size_result r = qoir_lz4_block_decode(
+          qoir_size_result r0 = qoir_lz4_block_decode(
               decbuf->private_impl.opcodes,
               sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
-          if (r.status_message) {
+          if (r0.status_message) {
             return qoir_status_message__error_invalid_data;
           }
-          const char* status_message = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals,               //
-              (uint32_t)tw, (uint32_t)th,                  //
-              decbuf->private_impl.opcodes, r.value + 8);  // See § for +8.
-          if (status_message) {
-            return status_message;
+          qoir_size_result r1 = qoir_private_decode_tile_opcodes(
+              decbuf->private_impl.literals, 4 * tw * th,   //
+              decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
+          if (r1.status_message) {
+            return r1.status_message;
+          } else if (r1.value != (4 * tw * th)) {
+            return qoir_status_message__error_invalid_data;
           }
           literals = decbuf->private_impl.literals;
           break;
