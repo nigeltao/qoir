@@ -489,6 +489,34 @@ qoir_private_swizzle__rgba__rgb(           //
 
 // -------- LZ4 Encode
 
+#define QOIR_LZ4_HASH_TABLE_SIZE 12
+
+static inline uint32_t  //
+qoir_lz4_private_hash(uint32_t x) {
+  // 2654435761u is Knuth's magic constant.
+  return (x * 2654435761u) >> (32 - QOIR_LZ4_HASH_TABLE_SIZE);
+}
+
+static inline size_t  //
+qoir_lz4_private_longest_common_prefix(const uint8_t* p,
+                                       const uint8_t* q,
+                                       const uint8_t* p_limit) {
+  const uint8_t* const original_p = p;
+  size_t n = p_limit - p;
+  while ((n >= 4) &&
+         (qoir_private_peek_u32le(p) == qoir_private_peek_u32le(q))) {
+    p += 4;
+    q += 4;
+    n -= 4;
+  }
+  while ((n > 0) && (*p == *q)) {
+    p += 1;
+    q += 1;
+    n -= 1;
+  }
+  return (size_t)(p - original_p);
+}
+
 QOIR_MAYBE_STATIC qoir_size_result         //
 qoir_lz4_block_encode_worst_case_dst_len(  //
     size_t src_len) {
@@ -519,15 +547,145 @@ qoir_lz4_block_encode(                     //
   }
   result.value = 0;
 
-  int n =
-      LZ4_compress_default((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
-                           ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
-  if (n <= 0) {
-    result.status_message = "#TODO: LZ4 compression error";
-    return result;
+  uint8_t* dp = dst_ptr;
+  const uint8_t* sp = src_ptr;
+  const uint8_t* literal_start = src_ptr;
+
+  // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for "The
+  // last match must start at least 12 bytes before the end of block" and other
+  // file format details, such as the LZ4 token's bit patterns.
+  if (src_len > 12) {
+    const uint8_t* const match_limit = src_ptr + src_len - 5;
+    const size_t final_literals_limit = src_len - 11;
+
+    // hash_table maps from QOIR_LZ4_HASH_TABLE_SIZE-bit keys to 32-bit values.
+    // Each value is an offset o, relative to src_ptr, initialized to zero.
+    // Each key, when set, is a hash of 4 bytes src_ptr[o .. o+4].
+    uint32_t hash_table[1 << QOIR_LZ4_HASH_TABLE_SIZE] = {0};
+
+    while (1) {
+      // Start with 1-byte steps, accelerating when not finding any matches
+      // (e.g. when compressing binary data, not text data).
+      size_t step = 1;
+      size_t step_counter = 1 << 6;
+
+      // Start with a non-empty literal.
+      const uint8_t* next_sp = sp + 1;
+      uint32_t next_hash =
+          qoir_lz4_private_hash(qoir_private_peek_u32le(next_sp));
+
+      // Find a match or goto final_literals.
+      const uint8_t* match = NULL;
+      do {
+        sp = next_sp;
+        next_sp += step;
+        step = step_counter++ >> 6;
+        if ((next_sp - src_ptr) > final_literals_limit) {
+          goto final_literals;
+        }
+        uint32_t* hash_table_entry = &hash_table[next_hash];
+        match = src_ptr + *hash_table_entry;
+        next_hash = qoir_lz4_private_hash(qoir_private_peek_u32le(next_sp));
+        *hash_table_entry = (uint32_t)(sp - src_ptr);
+      } while (((sp - match) > 0xFFFF) ||
+               (qoir_private_peek_u32le(sp) != qoir_private_peek_u32le(match)));
+
+      // Extend the match backwards.
+      while ((sp > literal_start) && (match > src_ptr) &&
+             (sp[-1] == match[-1])) {
+        sp--;
+        match--;
+      }
+
+      // Emit half of the LZ4 token, encoding the literal length. We'll fix up
+      // the other half later.
+      uint8_t* token = dp;
+      size_t literal_len = (size_t)(sp - literal_start);
+      if (literal_len < 15) {
+        *dp++ = (uint8_t)(literal_len << 4);
+      } else {
+        size_t n = literal_len - 15;
+        *dp++ = 0xF0;
+        for (; n >= 255; n -= 255) {
+          *dp++ = 0xFF;
+        }
+        *dp++ = (uint8_t)n;
+      }
+      memcpy(dp, literal_start, literal_len);
+      dp += literal_len;
+
+      while (1) {
+        // At this point:
+        //  - sp    points to the start of the match's later   copy.
+        //  - match points to the start of the match's earlier copy.
+        //  - token points to the LZ4 token.
+
+        // Calculate the match length and update the token's other half.
+        size_t copy_off = (size_t)(sp - match);
+        *dp++ = (uint8_t)(copy_off >> 0);
+        *dp++ = (uint8_t)(copy_off >> 8);
+        size_t adj_copy_len = qoir_lz4_private_longest_common_prefix(
+            4 + sp, 4 + match, match_limit);
+        if (adj_copy_len < 15) {
+          *token |= (uint8_t)adj_copy_len;
+        } else {
+          size_t n = adj_copy_len - 15;
+          *token |= 0x0F;
+          for (; n >= 255; n -= 255) {
+            *dp++ = 0xFF;
+          }
+          *dp++ = (uint8_t)n;
+        }
+        sp += 4 + adj_copy_len;
+
+        // Update the literal_start and check the final_literals_limit.
+        literal_start = sp;
+        if ((sp - src_ptr) >= final_literals_limit) {
+          goto final_literals;
+        }
+
+        // We've skipped over hashing everything within the match. Also, the
+        // minimum match length is 4. Update the hash table for one of those
+        // skipped positions.
+        hash_table[qoir_lz4_private_hash(qoir_private_peek_u32le(sp - 2))] =
+            (uint32_t)(sp - 2 - src_ptr);
+
+        // Check if this match can be followed immediately by another match.
+        // If so, continue the loop. Otherwise, break.
+        uint32_t* hash_table_entry =
+            &hash_table[qoir_lz4_private_hash(qoir_private_peek_u32le(sp))];
+        uint32_t old_offset = *hash_table_entry;
+        uint32_t new_offset = (uint32_t)(sp - src_ptr);
+        *hash_table_entry = new_offset;
+        match = src_ptr + old_offset;
+        if (((new_offset - old_offset) > 0xFFFF) ||
+            (qoir_private_peek_u32le(sp) != qoir_private_peek_u32le(match))) {
+          break;
+        }
+        token = dp++;
+        *token = 0;
+      }
+    }
   }
 
-  result.value = n;
+final_literals:
+  do {
+    size_t final_literal_len = src_len - (size_t)(literal_start - src_ptr);
+    if (final_literal_len < 15) {
+      *dp++ = (uint8_t)(final_literal_len << 4);
+    } else {
+      size_t n = final_literal_len - 15;
+      *dp++ = 0xF0;
+      for (; n >= 255; n -= 255) {
+        *dp++ = 0xFF;
+      }
+      *dp++ = (uint8_t)n;
+    }
+    memcpy(dp, literal_start, final_literal_len);
+    dp += final_literal_len;
+  } while (0);
+
+  result.value = (size_t)(dp - dst_ptr);
   return result;
 }
 
@@ -1170,6 +1328,7 @@ qoir_encode(                          //
 // --------
 
 #undef QOIR_FREE
+#undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 
