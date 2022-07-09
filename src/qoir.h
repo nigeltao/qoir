@@ -876,21 +876,18 @@ qoir_private_decode_tile_opcodes(  //
     return result;
   }
 
-  uint32_t run_length = 0;
   // The array-of-four-uint8_t elements are in R, G, B, A order.
   uint8_t color_cache[64][4] = {0};
   uint8_t pixel[4] = {0};
   pixel[3] = 0xFF;
+  // TODO: put pixel (opaque black) into the color_cache.
 
   uint8_t* dp = dst_ptr;
   uint8_t* dq = dst_ptr + dst_len;
   const uint8_t* sp = src_ptr;
   const uint8_t* sq = src_ptr + src_len - 8;
   while (dp < dq) {
-    if (run_length > 0) {
-      run_length--;
-
-    } else if (sp < sq) {
+    if (sp < sq) {
       uint64_t s64 = qoir_private_peek_u64le(sp);
       uint8_t s0 = *sp++;
       if (s0 == 0xF7) {  // QOIR_OP_RGB8
@@ -929,9 +926,27 @@ qoir_private_decode_tile_opcodes(  //
               pixel[2] += ((s64 >> 0x11u) & 0x7F) - 0x40;
               sp += 2;
             } else if (s0 < 0xD7) {  // QOIR_OP_RUNS
-              run_length = s0 >> 3;
+              size_t run_length = s0 >> 3;
+              if ((dq - dp) < (4 * (run_length + 1))) {
+                result.status_message = qoir_status_message__error_invalid_data;
+                return result;
+              }
+              do {
+                memcpy(dp, pixel, 4);
+                dp += 4;
+              } while (run_length--);
+              continue;
             } else if (s0 == 0xD7) {  // QOIR_OP_RUNL
-              run_length = *sp++;
+              size_t run_length = *sp++;
+              if ((dq - dp) < (4 * (run_length + 1))) {
+                result.status_message = qoir_status_message__error_invalid_data;
+                return result;
+              }
+              do {
+                memcpy(dp, pixel, 4);
+                dp += 4;
+              } while (run_length--);
+              continue;
             } else if (s0 == 0xDF) {  // QOIR_OP_RGBA2
               pixel[0] += ((s64 >> 0x08u) & 0x03) - 2;
               pixel[1] += ((s64 >> 0x0Au) & 0x03) - 2;
@@ -1283,6 +1298,7 @@ qoir_private_encode_tile_opcodes(  //
   uint8_t pixel[4] = {0};
   uint8_t prev[4] = {0};
   prev[3] = 0xFF;
+  // TODO: put pixel (opaque black) into the color_cache.
 
   uint8_t* dp = dst_ptr;
   const uint8_t* sp = src_data;
