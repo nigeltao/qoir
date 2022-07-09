@@ -19,16 +19,17 @@
 //
 // Most users will want the qoir_decode and qoir_encode functions, which read
 // from and write to a contiguous block of memory.
+//
+// This file also contains a stand-alone implementation of LZ4 block
+// compression, a general format that is not limited to compressing images. The
+// qoir_lz4_block_decode and qoir_lz4_block_encode functions also read from and
+// write to a contiguous block of memory.
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-// TODO: remove the dependency.
-#include <limits.h>
-#include <lz4.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,6 +78,7 @@ typedef struct qoir_size_result_struct {
 // -------- Status Messages
 
 extern const char qoir_lz4_status_message__error_dst_is_too_short[];
+extern const char qoir_lz4_status_message__error_invalid_data[];
 extern const char qoir_lz4_status_message__error_src_is_too_long[];
 
 extern const char qoir_status_message__error_invalid_argument[];
@@ -431,6 +433,8 @@ qoir_private_free(void (*contextual_free_func)(void*, void*),  //
 
 const char qoir_lz4_status_message__error_dst_is_too_short[] =  //
     "#qoir/lz4: dst is too short";
+const char qoir_lz4_status_message__error_invalid_data[] =  //
+    "#qoir/lz4: invalid data";
 const char qoir_lz4_status_message__error_src_is_too_long[] =  //
     "#qoir/lz4: src is too long";
 
@@ -530,15 +534,85 @@ qoir_lz4_block_decode(                     //
     return result;
   }
 
-  int n =
-      LZ4_decompress_safe((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
-                          ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
-  if (n < 0) {
-    result.status_message = "#TODO: LZ4 decompression error";
-    return result;
+  uint8_t* const original_dst_ptr = dst_ptr;
+
+  // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for file
+  // format details, such as the LZ4 token's bit patterns.
+  while (src_len > 0) {
+    uint32_t token = *src_ptr++;
+    src_len--;
+
+    uint32_t literal_len = token >> 4;
+    if (literal_len > 0) {
+      if (literal_len == 15) {
+        while (1) {
+          if (src_len == 0) {
+            goto fail_invalid_data;
+          }
+          uint32_t s = *src_ptr++;
+          src_len--;
+          literal_len += s;
+          if (s != 255) {
+            break;
+          }
+        }
+      }
+
+      if (literal_len > src_len) {
+        goto fail_invalid_data;
+      } else if (literal_len > dst_len) {
+        result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
+        return result;
+      }
+      memcpy(dst_ptr, src_ptr, literal_len);
+      dst_ptr += literal_len;
+      dst_len -= literal_len;
+      src_ptr += literal_len;
+      src_len -= literal_len;
+      if (src_len == 0) {
+        result.value = ((size_t)(dst_ptr - original_dst_ptr));
+        return result;
+      }
+    }
+
+    if (src_len < 2) {
+      goto fail_invalid_data;
+    }
+    uint32_t copy_off = ((uint32_t)src_ptr[0]) | (((uint32_t)src_ptr[1]) << 8);
+    src_ptr += 2;
+    src_len -= 2;
+    if ((copy_off == 0) ||  //
+        (copy_off > ((size_t)(dst_ptr - original_dst_ptr)))) {
+      goto fail_invalid_data;
+    }
+
+    uint32_t copy_len = (token & 15) + 4;
+    if (copy_len == 19) {
+      while (1) {
+        if (src_len == 0) {
+          goto fail_invalid_data;
+        }
+        uint32_t s = *src_ptr++;
+        src_len--;
+        copy_len += s;
+        if (s != 255) {
+          break;
+        }
+      }
+    }
+
+    if (dst_len < copy_len) {
+      result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
+      return result;
+    }
+    dst_len -= copy_len;
+    for (const uint8_t* from = dst_ptr - copy_off; copy_len > 0; copy_len--) {
+      *dst_ptr++ = *from++;
+    }
   }
 
-  result.value = n;
+fail_invalid_data:
+  result.status_message = qoir_lz4_status_message__error_invalid_data;
   return result;
 }
 
