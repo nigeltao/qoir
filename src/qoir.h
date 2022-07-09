@@ -898,21 +898,32 @@ qoir_private_decode_tile_opcodes(  //
       pixel[0] += *sp++;
       pixel[1] += *sp++;
       pixel[2] += *sp++;
+      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(dp, pixel, 4);
+      dp += 4;
     } else if (s0 == 0xEF) {  // QOIR_OP_RGBA8
       pixel[0] += *sp++;
       pixel[1] += *sp++;
       pixel[2] += *sp++;
       pixel[3] += *sp++;
+      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(dp, pixel, 4);
+      dp += 4;
     } else {
       switch (s0 & 0x03) {
         case 0: {  // QOIR_OP_INDEX
           memcpy(pixel, color_cache[s0 >> 2], 4);
+          memcpy(dp, pixel, 4);
+          dp += 4;
           break;
         }
         case 1: {  // QOIR_OP_RGB2
           pixel[0] += ((s0 >> 2) & 0x03) - 2;
           pixel[1] += ((s0 >> 4) & 0x03) - 2;
           pixel[2] += ((s0 >> 6) & 0x03) - 2;
+          memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+          memcpy(dp, pixel, 4);
+          dp += 4;
           break;
         }
         case 2: {  // QOIR_OP_LUMA
@@ -921,6 +932,9 @@ qoir_private_decode_tile_opcodes(  //
           pixel[0] += delta_g - 8 + (s1 & 0x0F);
           pixel[1] += delta_g;
           pixel[2] += delta_g - 8 + (s1 >> 4);
+          memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+          memcpy(dp, pixel, 4);
+          dp += 4;
           break;
         }
         case 3: {
@@ -929,6 +943,9 @@ qoir_private_decode_tile_opcodes(  //
             pixel[1] += ((s64 >> 0x0Au) & 0x7F) - 0x40;
             pixel[2] += ((s64 >> 0x11u) & 0x7F) - 0x40;
             sp += 2;
+            memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+            memcpy(dp, pixel, 4);
+            dp += 4;
           } else if (s0 < 0xD7) {  // QOIR_OP_RUNS
             size_t run_length = s0 >> 3;
             if ((dq - dp) < (4 * (run_length + 1))) {
@@ -939,7 +956,6 @@ qoir_private_decode_tile_opcodes(  //
               memcpy(dp, pixel, 4);
               dp += 4;
             } while (run_length--);
-            continue;
           } else if (s0 == 0xD7) {  // QOIR_OP_RUNL
             size_t run_length = *sp++;
             if ((dq - dp) < (4 * (run_length + 1))) {
@@ -950,29 +966,34 @@ qoir_private_decode_tile_opcodes(  //
               memcpy(dp, pixel, 4);
               dp += 4;
             } while (run_length--);
-            continue;
           } else if (s0 == 0xDF) {  // QOIR_OP_RGBA2
             pixel[0] += ((s64 >> 0x08u) & 0x03) - 2;
             pixel[1] += ((s64 >> 0x0Au) & 0x03) - 2;
             pixel[2] += ((s64 >> 0x0Cu) & 0x03) - 2;
             pixel[3] += ((s64 >> 0x0Eu) & 0x03) - 2;
             sp += 1;
+            memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+            memcpy(dp, pixel, 4);
+            dp += 4;
           } else if (s0 == 0xE7) {  // QOIR_OP_RGBA4
             pixel[0] += ((s64 >> 0x08u) & 0x0F) - 8;
             pixel[1] += ((s64 >> 0x0Cu) & 0x0F) - 8;
             pixel[2] += ((s64 >> 0x10u) & 0x0F) - 8;
             pixel[3] += ((s64 >> 0x14u) & 0x0F) - 8;
             sp += 2;
+            memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+            memcpy(dp, pixel, 4);
+            dp += 4;
           } else {  // QOIR_OP_A8
             pixel[3] = *sp++;
+            memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+            memcpy(dp, pixel, 4);
+            dp += 4;
           }
           break;
         }
       }
     }
-    memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
-    memcpy(dp, pixel, 4);
-    dp += 4;
   }
 
   if (sp != sq) {
