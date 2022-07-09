@@ -894,14 +894,14 @@ qoir_private_decode_tile_opcodes(  //
       uint64_t s64 = qoir_private_peek_u64le(sp);
       uint8_t s0 = *sp++;
       if (s0 == 0xF7) {  // QOIR_OP_RGB8
-        pixel[0] = *sp++;
-        pixel[1] = *sp++;
-        pixel[2] = *sp++;
+        pixel[0] += *sp++;
+        pixel[1] += *sp++;
+        pixel[2] += *sp++;
       } else if (s0 == 0xEF) {  // QOIR_OP_RGBA8
-        pixel[0] = *sp++;
-        pixel[1] = *sp++;
-        pixel[2] = *sp++;
-        pixel[3] = *sp++;
+        pixel[0] += *sp++;
+        pixel[1] += *sp++;
+        pixel[2] += *sp++;
+        pixel[3] += *sp++;
       } else {
         switch (s0 & 0x03) {
           case 0: {  // QOIR_OP_INDEX
@@ -1353,9 +1353,9 @@ qoir_private_encode_tile_opcodes(  //
 
           } else {
             *dp++ = 0xF7;  // QOIR_OP_RGB8
-            *dp++ = pixel[0];
-            *dp++ = pixel[1];
-            *dp++ = pixel[2];
+            *dp++ = d0;
+            *dp++ = d1;
+            *dp++ = d2;
           }
 
         } else if ((d0 | d1 | d2) == 0) {
@@ -1378,10 +1378,10 @@ qoir_private_encode_tile_opcodes(  //
                     ((d3 + 8) << 4);
           } else {
             *dp++ = 0xEF;  // QOIR_OP_RGBA8
-            *dp++ = pixel[0];
-            *dp++ = pixel[1];
-            *dp++ = pixel[2];
-            *dp++ = pixel[3];
+            *dp++ = d0;
+            *dp++ = d1;
+            *dp++ = d2;
+            *dp++ = d3;
           }
         }
       }
