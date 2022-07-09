@@ -27,6 +27,7 @@
 #include <string.h>
 
 // TODO: remove the dependency.
+#include <limits.h>
 #include <lz4.h>
 
 #ifdef __cplusplus
@@ -57,6 +58,15 @@ extern "C" {
 #define QOIR_MAYBE_STATIC
 #endif  // defined(QOIR_CONFIG__STATIC_FUNCTIONS)
 
+// -------- Other Macros
+
+// Clang also #define's "__GNUC__".
+#if defined(__GNUC__) || defined(_MSC_VER)
+#define QOIR_RESTRICT __restrict
+#else
+#define QOIR_RESTRICT
+#endif
+
 // -------- Basic Result Types
 
 typedef struct qoir_size_result_struct {
@@ -65,6 +75,9 @@ typedef struct qoir_size_result_struct {
 } qoir_size_result;
 
 // -------- Status Messages
+
+extern const char qoir_lz4_status_message__error_dst_is_too_short[];
+extern const char qoir_lz4_status_message__error_src_is_too_long[];
 
 extern const char qoir_status_message__error_invalid_argument[];
 extern const char qoir_status_message__error_invalid_data[];
@@ -139,6 +152,36 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 
 // QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
 #define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
+
+// -------- LZ4 Encode
+
+// QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN is the maximum (inclusive) supported
+// input length for this file's qoir_lz4_block_encode functions. The LZ4 block
+// format can generally support longer inputs, but this implementation
+// specifically is more limited, to simplify overflow checking.
+//
+// 0x7E000000 = 2113929216, which is over two billion bytes.
+#define QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN 0x7E000000
+
+// qoir_lz4_block_encode_worst_case_dst_len returns the maximum (inclusive)
+// number of bytes required to LZ4 block compress src_len input bytes.
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_encode_worst_case_dst_len(  //
+    size_t src_len);
+
+// qoir_lz4_block_encode writes to dst the LZ4 block compressed form of src,
+// returning the number of bytes written.
+//
+// Unlike the LZ4_compress_default function from the official implementation
+// (https://github.com/lz4/lz4), it fails immediately if dst_len is less than
+// qoir_lz4_block_encode_worst_case_dst_len(src_len), even if the worst case is
+// unrealized and the compressed form would actually fit.
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_encode(                     //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_len,                        //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_len);
 
 // -------- QOIR Decode
 
@@ -251,13 +294,6 @@ qoir_encode(                          //
 #define QOIR_USE_MEMCPY_LE_PEEK_POKE
 #endif
 
-// Clang also #define's "__GNUC__".
-#if defined(__GNUC__) || defined(_MSC_VER)
-#define QOIR_RESTRICT __restrict
-#else
-#define QOIR_RESTRICT
-#endif
-
 static inline uint32_t  //
 qoir_private_peek_u32le(const uint8_t* p) {
 #if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
@@ -326,6 +362,12 @@ qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
                   : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
 }
 
+// QOIR_TILE_LZ4_COMPRESSION_WORST_CASE equals
+// qoir_lz4_block_encode_worst_case_dst_len(4 * QTS * QTS).
+#define QOIR_TILE_LZ4_COMPRESSION_WORST_CASE \
+  ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) +   \
+   ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) / 255) + 16)
+
 // -------- Memory Management
 
 #define QOIR_MALLOC(len)                                                \
@@ -358,6 +400,11 @@ qoir_private_free(void (*contextual_free_func)(void*, void*),  //
 }
 
 // -------- Status Messages
+
+const char qoir_lz4_status_message__error_dst_is_too_short[] =  //
+    "#qoir/lz4: dst is too short";
+const char qoir_lz4_status_message__error_src_is_too_long[] =  //
+    "#qoir/lz4: src is too long";
 
 const char qoir_status_message__error_invalid_argument[] =  //
     "#qoir: invalid argument";
@@ -438,6 +485,50 @@ qoir_private_swizzle__rgba__rgb(           //
     dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
     src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
   }
+}
+
+// -------- LZ4 Encode
+
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_encode_worst_case_dst_len(  //
+    size_t src_len) {
+  qoir_size_result result = {0};
+
+  if (src_len > QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN) {
+    result.status_message = qoir_lz4_status_message__error_src_is_too_long;
+    return result;
+  }
+  // For the curious, if (src_len <= 0x7E000000) then (value <= 0x7E7E7E8E).
+  result.value = src_len + (src_len / 255) + 16;
+  return result;
+}
+
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_encode(                     //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_len,                        //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_len) {
+  qoir_size_result result = qoir_lz4_block_encode_worst_case_dst_len(src_len);
+  if (result.status_message) {
+    return result;
+  } else if (result.value > dst_len) {
+    result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
+    result.value = 0;
+    return result;
+  }
+  result.value = 0;
+
+  int n =
+      LZ4_compress_default((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
+                           ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
+  if (n <= 0) {
+    result.status_message = "#TODO: LZ4 compression error";
+    return result;
+  }
+
+  result.value = n;
+  return result;
 }
 
 // -------- QOIR Decode
@@ -928,21 +1019,21 @@ qoir_private_encode_qpix_payload(  //
                  sp, src_pixbuf->stride_in_bytes,        //
                  tw, th);
 
-      qoir_size_result r = qoir_private_encode_tile_opcodes(
+      qoir_size_result r0 = qoir_private_encode_tile_opcodes(
           encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
+      if (r0.status_message) {
+        result.status_message = r0.status_message;
+        return r0;
+      }
       size_t literals_len = 4 * tw * th;
-      if (r.status_message) {
-        result.status_message = r.status_message;
-        return r;
-
-      } else if (r.value >= literals_len) {
+      if (r0.value >= literals_len) {
         // Use the Literals or LZ4-Literals tile format.
-        int n = LZ4_compress_default(
-            ((const char*)(encbuf->private_impl.literals)), ((char*)(dp + 4)),
-            (int)literals_len, 4 * QOIR_TS2);
-        if ((0 < n) && (n < literals_len)) {
-          qoir_private_poke_u32le(dp, 0x02000000 | (uint32_t)n);
-          dp += 4 + n;
+        qoir_size_result r1 =
+            qoir_lz4_block_encode(dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
+                                  encbuf->private_impl.literals, literals_len);
+        if (!r1.status_message && (r1.value < r0.value)) {
+          qoir_private_poke_u32le(dp, 0x02000000 | (uint32_t)r1.value);
+          dp += 4 + r1.value;
         } else {
           memcpy(dp + 4, encbuf->private_impl.literals, literals_len);
           qoir_private_poke_u32le(dp, 0x00000000 | (uint32_t)literals_len);
@@ -951,16 +1042,16 @@ qoir_private_encode_qpix_payload(  //
 
       } else {
         // Use the Opcodes or LZ4-Opcodes tile format.
-        int n =
-            LZ4_compress_default(((const char*)(encbuf->private_impl.opcodes)),
-                                 ((char*)(dp + 4)), (int)r.value, 4 * QOIR_TS2);
-        if ((0 < n) && (n < r.value)) {
-          qoir_private_poke_u32le(dp, 0x03000000 | (uint32_t)n);
-          dp += 4 + n;
+        qoir_size_result r1 =
+            qoir_lz4_block_encode(dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
+                                  encbuf->private_impl.opcodes, r0.value);
+        if (!r1.status_message && (r1.value < r0.value)) {
+          qoir_private_poke_u32le(dp, 0x03000000 | (uint32_t)r1.value);
+          dp += 4 + r1.value;
         } else {
-          memcpy(dp + 4, encbuf->private_impl.opcodes, r.value);
-          qoir_private_poke_u32le(dp, 0x01000000 | (uint32_t)r.value);
-          dp += 4 + r.value;
+          memcpy(dp + 4, encbuf->private_impl.opcodes, r0.value);
+          qoir_private_poke_u32le(dp, 0x01000000 | (uint32_t)r0.value);
+          dp += 4 + r0.value;
         }
       }
     }
@@ -1012,8 +1103,11 @@ qoir_encode(                          //
       4 + (4 * QOIR_TS2);  // Prefix + literal format.
   uint64_t dst_len_worst_case =
       (width_in_tiles * height_in_tiles * tile_len_worst_case) +
-      44;  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
-           // QOIR also has an 8 byte payload.
+      44 +  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
+            // QOIR also has an 8 byte payload.
+      (QOIR_TILE_LZ4_COMPRESSION_WORST_CASE -
+       (4 * QOIR_TS2));  // We might temporarily write more than (4 * QOIR_TS2)
+                         // bytes when LZ4 compressing each tile.
   if (dst_len_worst_case > SIZE_MAX) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
@@ -1077,7 +1171,6 @@ qoir_encode(                          //
 
 #undef QOIR_FREE
 #undef QOIR_MALLOC
-#undef QOIR_RESTRICT
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 
 // ================================ -Private Implementation
