@@ -901,15 +901,6 @@ qoir_private_decode_tile_opcodes(  //
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
-    } else if ((s64 & 0xFF) == 0xEF) {  // QOIR_OP_RGBA8
-      pixel[0] += (uint8_t)(s64 >> 0x08);
-      pixel[1] += (uint8_t)(s64 >> 0x10);
-      pixel[2] += (uint8_t)(s64 >> 0x18);
-      pixel[3] += (uint8_t)(s64 >> 0x20);
-      sp += 5;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
-      memcpy(dp, pixel, 4);
-      dp += 4;
     } else {
       switch (s64 & 0x03) {
         case 0: {  // QOIR_OP_INDEX
@@ -986,6 +977,15 @@ qoir_private_decode_tile_opcodes(  //
             pixel[2] += ((s64 >> 0x10u) & 0x0F) - 8;
             pixel[3] += ((s64 >> 0x14u) & 0x0F) - 8;
             sp += 3;
+            memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+            memcpy(dp, pixel, 4);
+            dp += 4;
+          } else if ((s64 & 0xFF) == 0xEF) {  // QOIR_OP_RGBA8
+            pixel[0] += (uint8_t)(s64 >> 0x08);
+            pixel[1] += (uint8_t)(s64 >> 0x10);
+            pixel[2] += (uint8_t)(s64 >> 0x18);
+            pixel[3] += (uint8_t)(s64 >> 0x20);
+            sp += 5;
             memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
             memcpy(dp, pixel, 4);
             dp += 4;
