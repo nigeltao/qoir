@@ -875,10 +875,18 @@ qoir_private_decode_tile_opcodes(  //
   }
 
   // The array-of-four-uint8_t elements are in R, G, B, A order.
-  uint8_t color_cache[64][4] = {0};
-  uint8_t pixel[4] = {0};
+  uint8_t color_cache[64][4];
+  for (int i = 0; i < 64; i++) {
+    color_cache[i][0] = 0x00;
+    color_cache[i][1] = 0x00;
+    color_cache[i][2] = 0x00;
+    color_cache[i][3] = 0xFF;
+  }
+  uint8_t pixel[4];
+  pixel[0] = 0x00;
+  pixel[1] = 0x00;
+  pixel[2] = 0x00;
   pixel[3] = 0xFF;
-  // TODO: put pixel (opaque black) into the color_cache.
 
   uint8_t* dp = dst_ptr;
   uint8_t* dq = dst_ptr + dst_len;
@@ -1322,11 +1330,19 @@ qoir_private_encode_tile_opcodes(  //
 
   uint32_t run_length = 0;
   // The array-of-four-uint8_t elements are in R, G, B, A order.
-  uint8_t color_cache[64][4] = {0};
-  uint8_t pixel[4] = {0};
-  uint8_t prev[4] = {0};
+  uint8_t color_cache[64][4];
+  for (int i = 0; i < 64; i++) {
+    color_cache[i][0] = 0x00;
+    color_cache[i][1] = 0x00;
+    color_cache[i][2] = 0x00;
+    color_cache[i][3] = 0xFF;
+  }
+  uint8_t prev[4];
+  prev[0] = 0x00;
+  prev[1] = 0x00;
+  prev[2] = 0x00;
   prev[3] = 0xFF;
-  // TODO: put pixel (opaque black) into the color_cache.
+  uint8_t pixel[4];
 
   uint8_t* dp = dst_ptr;
   const uint8_t* sp = src_data;
