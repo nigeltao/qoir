@@ -382,10 +382,8 @@ qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
 
 static inline uint32_t  //
 qoir_private_hash(const uint8_t* p) {
-  return 63 & ((0x03 * (uint32_t)p[0]) +  //
-               (0x05 * (uint32_t)p[1]) +  //
-               (0x07 * (uint32_t)p[2]) +  //
-               (0x0B * (uint32_t)p[3]));
+  // 2654435761u is Knuth's magic constant. 6 is log2(color_cache_size).
+  return (qoir_private_peek_u32le(p) * 2654435761u) >> (32 - 6);
 }
 
 static inline uint32_t  //
