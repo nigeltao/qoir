@@ -1,0 +1,21 @@
+Opcode frequency, as of commit 70fa675 "Use Knuth hash for the color cache".
+
+images  lance   op
+0.2433  0.3911  QOIR_OP_INDEX
+0.1426  0.1687  QOIR_OP_RGB2
+0.3906  0.0976  QOIR_OP_LUMA
+0.1047  0.0104  QOIR_OP_RGB7
+0.0833  0.2194  QOIR_OP_RUNS
+0.0056  0.0118  QOIR_OP_RUNL
+0.0004  0.0194  QOIR_OP_RGBA2
+0.0014  0.0195  QOIR_OP_RGBA4
+0.0081  0.0120  QOIR_OP_RGBA8
+0.0183  0.0013  QOIR_OP_RGB8
+0.0017  0.0487  QOIR_OP_A8
+1.0000  1.0000  Total
+
+The "images" corpus is linked to from
+https://qoiformat.org/benchmark/
+
+The "lance" corpus is linked to from
+https://github.com/phoboslab/qoi/issues/69#issuecomment-996493697
