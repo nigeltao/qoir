@@ -902,21 +902,21 @@ qoir_private_decode_tile_opcodes(  //
 
     } else if ((s64 & 0x03) == 0) {  // QOIR_OP_INDEX
       sp += 1;
-      memcpy(pixel, color_cache[(uint8_t)s64 >> 2], 4);
+      memcpy(pixel, color_cache[(uint8_t)s64 >> 0x02], 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else if ((s64 & 0x03) == 1) {  // QOIR_OP_RGB2
-      pixel[0] += ((s64 >> 2) & 0x03) - 2;
-      pixel[1] += ((s64 >> 4) & 0x03) - 2;
-      pixel[2] += ((s64 >> 6) & 0x03) - 2;
+      pixel[0] += ((s64 >> 0x02) & 0x03) - 2;
+      pixel[1] += ((s64 >> 0x04) & 0x03) - 2;
+      pixel[2] += ((s64 >> 0x06) & 0x03) - 2;
       sp += 1;
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else if ((s64 & 0x03) == 2) {  // QOIR_OP_LUMA
-      uint8_t delta_g = ((uint8_t)s64 >> 2) - 32;
+      uint8_t delta_g = ((uint8_t)s64 >> 0x02) - 32;
       pixel[0] += delta_g - 8 + ((s64 >> 0x08) & 0x0F);
       pixel[1] += delta_g;
       pixel[2] += delta_g - 8 + ((s64 >> 0x0C) & 0x0F);
@@ -926,16 +926,16 @@ qoir_private_decode_tile_opcodes(  //
       dp += 4;
 
     } else if ((s64 & 0x07) == 3) {  // QOIR_OP_RGB7
-      pixel[0] += ((s64 >> 0x03u) & 0x7F) - 0x40;
-      pixel[1] += ((s64 >> 0x0Au) & 0x7F) - 0x40;
-      pixel[2] += ((s64 >> 0x11u) & 0x7F) - 0x40;
+      pixel[0] += ((s64 >> 0x03) & 0x7F) - 0x40;
+      pixel[1] += ((s64 >> 0x0A) & 0x7F) - 0x40;
+      pixel[2] += ((s64 >> 0x11) & 0x7F) - 0x40;
       sp += 3;
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else if ((s64 & 0xFF) < 0xD7) {  // QOIR_OP_RUNS
-      size_t run_length = (s64 & 0xFF) >> 3;
+      size_t run_length = (s64 & 0xFF) >> 0x03;
       if ((dq - dp) < (4 * (run_length + 1))) {
         result.status_message = qoir_status_message__error_invalid_data;
         return result;
@@ -947,7 +947,7 @@ qoir_private_decode_tile_opcodes(  //
       sp += 1;
 
     } else if ((s64 & 0xFF) == 0xD7) {  // QOIR_OP_RUNL
-      size_t run_length = (s64 >> 8) & 0xFF;
+      size_t run_length = (s64 >> 0x08) & 0xFF;
       if ((dq - dp) < (4 * (run_length + 1))) {
         result.status_message = qoir_status_message__error_invalid_data;
         return result;
@@ -959,20 +959,20 @@ qoir_private_decode_tile_opcodes(  //
       sp += 2;
 
     } else if ((s64 & 0xFF) == 0xDF) {  // QOIR_OP_RGBA2
-      pixel[0] += ((s64 >> 0x08u) & 0x03) - 2;
-      pixel[1] += ((s64 >> 0x0Au) & 0x03) - 2;
-      pixel[2] += ((s64 >> 0x0Cu) & 0x03) - 2;
-      pixel[3] += ((s64 >> 0x0Eu) & 0x03) - 2;
+      pixel[0] += ((s64 >> 0x08) & 0x03) - 2;
+      pixel[1] += ((s64 >> 0x0A) & 0x03) - 2;
+      pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
+      pixel[3] += ((s64 >> 0x0E) & 0x03) - 2;
       sp += 2;
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else if ((s64 & 0xFF) == 0xE7) {  // QOIR_OP_RGBA4
-      pixel[0] += ((s64 >> 0x08u) & 0x0F) - 8;
-      pixel[1] += ((s64 >> 0x0Cu) & 0x0F) - 8;
-      pixel[2] += ((s64 >> 0x10u) & 0x0F) - 8;
-      pixel[3] += ((s64 >> 0x14u) & 0x0F) - 8;
+      pixel[0] += ((s64 >> 0x08) & 0x0F) - 8;
+      pixel[1] += ((s64 >> 0x0C) & 0x0F) - 8;
+      pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
+      pixel[3] += ((s64 >> 0x14) & 0x0F) - 8;
       sp += 3;
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
       memcpy(dp, pixel, 4);
@@ -1346,7 +1346,7 @@ qoir_private_encode_tile_opcodes(  //
     } else {
       if (run_length > 0) {
         if (run_length <= 26) {
-          *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 3));  // QOIR_OP_RUNS
+          *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
           run_length = 0;
         } else {
           *dp++ = 0xD7;  // QOIR_OP_RUNL
@@ -1357,7 +1357,7 @@ qoir_private_encode_tile_opcodes(  //
 
       uint32_t hash = qoir_private_hash(pixel);
       if (!memcmp(color_cache[hash], pixel, 4)) {
-        *dp++ = (uint8_t)(0x00 | (hash << 2));  // QOIR_OP_INDEX
+        *dp++ = (uint8_t)(0x00 | (hash << 0x02));  // QOIR_OP_INDEX
 
       } else {
         memcpy(color_cache[hash], pixel, 4);
@@ -1375,24 +1375,24 @@ qoir_private_encode_tile_opcodes(  //
           uint8_t d2d1 = d2 - d1;
 
           if (dist < 0x04) {
-            *dp++ = 0x01 |             // QOIR_OP_RGB2
-                    ((d0 + 2) << 2) |  //
-                    ((d1 + 2) << 4) |  //
-                    ((d2 + 2) << 6);
+            *dp++ = 0x01 |                // QOIR_OP_RGB2
+                    ((d0 + 2) << 0x02) |  //
+                    ((d1 + 2) << 0x04) |  //
+                    ((d2 + 2) << 0x06);
 
           } else if ((dist1 < 0x40) && ((dists[d0d1] | dists[d2d1]) < 0x10)) {
-            *dp++ = 0x02 |                    // QOIR_OP_LUMA
-                    (((d1 + 0x20)) << 2);     //
-            *dp++ = (((d0d1 + 0x08)) << 0) |  //
-                    (((d2d1 + 0x08)) << 4);
+            *dp++ = 0x02 |                       // QOIR_OP_LUMA
+                    (((d1 + 0x20)) << 0x02);     //
+            *dp++ = (((d0d1 + 0x08)) << 0x00) |  //
+                    (((d2d1 + 0x08)) << 0x04);
 
           } else if (dist < 0x80) {
             qoir_private_poke_u32le(
                 dp,
                 0x03 |  // QOIR_OP_RGB7
-                    ((uint32_t)(uint8_t)(d0 + 0x40) << 0x03u) |
-                    ((uint32_t)(uint8_t)(d1 + 0x40) << 0x0Au) |
-                    ((uint32_t)(uint8_t)(d2 + 0x40) << 0x11u));
+                    ((uint32_t)(uint8_t)(d0 + 0x40) << 0x03) |
+                    ((uint32_t)(uint8_t)(d1 + 0x40) << 0x0A) |
+                    ((uint32_t)(uint8_t)(d2 + 0x40) << 0x11));
             dp += 3;
 
           } else {
@@ -1409,17 +1409,17 @@ qoir_private_encode_tile_opcodes(  //
         } else {
           uint8_t dist = dists[d0] | dists[d1] | dists[d2] | dists[d3];
           if (dist < 0x04) {
-            *dp++ = 0xDF;              // QOIR_OP_RGBA2
-            *dp++ = ((d0 + 2) << 0) |  //
-                    ((d1 + 2) << 2) |  //
-                    ((d2 + 2) << 4) |  //
-                    ((d3 + 2) << 6);
+            *dp++ = 0xDF;                 // QOIR_OP_RGBA2
+            *dp++ = ((d0 + 2) << 0x00) |  //
+                    ((d1 + 2) << 0x02) |  //
+                    ((d2 + 2) << 0x04) |  //
+                    ((d3 + 2) << 0x06);
           } else if (dist < 0x10) {
-            *dp++ = 0xE7;              // QOIR_OP_RGBA4
-            *dp++ = ((d0 + 8) << 0) |  //
-                    ((d1 + 8) << 4);
-            *dp++ = ((d2 + 8) << 0) |  //
-                    ((d3 + 8) << 4);
+            *dp++ = 0xE7;                 // QOIR_OP_RGBA4
+            *dp++ = ((d0 + 8) << 0x00) |  //
+                    ((d1 + 8) << 0x04);   //
+            *dp++ = ((d2 + 8) << 0x00) |  //
+                    ((d3 + 8) << 0x04);
           } else {
             *dp++ = 0xEF;  // QOIR_OP_RGBA8
             *dp++ = d0;
@@ -1437,7 +1437,7 @@ qoir_private_encode_tile_opcodes(  //
 
   if (run_length > 0) {
     if (run_length <= 26) {
-      *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 3));  // QOIR_OP_RUNS
+      *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
       run_length = 0;
     } else {
       *dp++ = 0xD7;  // QOIR_OP_RUNL
