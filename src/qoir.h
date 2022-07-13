@@ -1433,76 +1433,75 @@ qoir_private_encode_tile_opcodes(           //
         _mm_avg_epu8(_mm_cvtsi32_si128(pred32l), _mm_cvtsi32_si128(pred32a))));
     uint8_t delta[4];
     memcpy(delta, &delta32, 4);
-    uint8_t d0 = delta[0];
-    uint8_t d1 = delta[1];
-    uint8_t d2 = delta[2];
-    uint8_t d3 = delta[3];
 #else
-    uint8_t d0 = sp[0] - ((1 + sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
-    uint8_t d1 = sp[1] - ((1 + sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
-    uint8_t d2 = sp[2] - ((1 + sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
-    uint8_t d3 = sp[3] - ((1 + sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
+    uint8_t delta[4];
+    delta[0] = sp[0] - ((1 + sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
+    delta[1] = sp[1] - ((1 + sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
+    delta[2] = sp[2] - ((1 + sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
+    delta[3] = sp[3] - ((1 + sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
 #endif
 
-    if (!has_alpha || (d3 == 0)) {
-      uint8_t dist02 = dists[d0] | dists[d2];
-      uint8_t dist1 = dists[d1];
+    if (!has_alpha || (delta[3] == 0)) {
+      uint8_t dist02 = dists[delta[0]] | dists[delta[2]];
+      uint8_t dist1 = dists[delta[1]];
       uint8_t dist = dist02 | dist1;
 
-      uint8_t d0d1 = d0 - d1;
-      uint8_t d2d1 = d2 - d1;
+      uint8_t d0d1 = delta[0] - delta[1];
+      uint8_t d2d1 = delta[2] - delta[1];
 
       if (dist < 0x04) {
-        *dp++ = 0x01 |                // QOIR_OP_RGB2
-                ((d0 + 2) << 0x02) |  //
-                ((d1 + 2) << 0x04) |  //
-                ((d2 + 2) << 0x06);
+        *dp++ = 0x01 |                      // QOIR_OP_RGB2
+                ((delta[0] + 2) << 0x02) |  //
+                ((delta[1] + 2) << 0x04) |  //
+                ((delta[2] + 2) << 0x06);
 
       } else if ((dist1 < 0x40) && ((dists[d0d1] | dists[d2d1]) < 0x10)) {
-        *dp++ = 0x02 |                       // QOIR_OP_LUMA
-                (((d1 + 0x20)) << 0x02);     //
-        *dp++ = (((d0d1 + 0x08)) << 0x00) |  //
+        *dp++ = 0x02 |                          // QOIR_OP_LUMA
+                (((delta[1] + 0x20)) << 0x02);  //
+        *dp++ = (((d0d1 + 0x08)) << 0x00) |     //
                 (((d2d1 + 0x08)) << 0x04);
 
       } else if (dist < 0x80) {
-        qoir_private_poke_u32le(dp,
-                                0x03 |  // QOIR_OP_RGB7
-                                    ((uint32_t)(uint8_t)(d0 + 0x40) << 0x03) |
-                                    ((uint32_t)(uint8_t)(d1 + 0x40) << 0x0A) |
-                                    ((uint32_t)(uint8_t)(d2 + 0x40) << 0x11));
+        qoir_private_poke_u32le(
+            dp,
+            0x03 |  // QOIR_OP_RGB7
+                ((uint32_t)(uint8_t)(delta[0] + 0x40) << 0x03) |
+                ((uint32_t)(uint8_t)(delta[1] + 0x40) << 0x0A) |
+                ((uint32_t)(uint8_t)(delta[2] + 0x40) << 0x11));
         dp += 3;
 
       } else {
         *dp++ = 0xF7;  // QOIR_OP_RGB8
-        *dp++ = d0;
-        *dp++ = d1;
-        *dp++ = d2;
+        *dp++ = delta[0];
+        *dp++ = delta[1];
+        *dp++ = delta[2];
       }
 
-    } else if ((d0 | d1 | d2) == 0) {
+    } else if ((delta[0] | delta[1] | delta[2]) == 0) {
       *dp++ = 0xFF;  // QOIR_OP_A8
-      *dp++ = d3;
+      *dp++ = delta[3];
 
     } else {
-      uint8_t dist = dists[d0] | dists[d1] | dists[d2] | dists[d3];
+      uint8_t dist =
+          dists[delta[0]] | dists[delta[1]] | dists[delta[2]] | dists[delta[3]];
       if (dist < 0x04) {
-        *dp++ = 0xDF;                 // QOIR_OP_RGBA2
-        *dp++ = ((d0 + 2) << 0x00) |  //
-                ((d1 + 2) << 0x02) |  //
-                ((d2 + 2) << 0x04) |  //
-                ((d3 + 2) << 0x06);
+        *dp++ = 0xDF;                       // QOIR_OP_RGBA2
+        *dp++ = ((delta[0] + 2) << 0x00) |  //
+                ((delta[1] + 2) << 0x02) |  //
+                ((delta[2] + 2) << 0x04) |  //
+                ((delta[3] + 2) << 0x06);
       } else if (dist < 0x10) {
-        *dp++ = 0xE7;                 // QOIR_OP_RGBA4
-        *dp++ = ((d0 + 8) << 0x00) |  //
-                ((d1 + 8) << 0x04);   //
-        *dp++ = ((d2 + 8) << 0x00) |  //
-                ((d3 + 8) << 0x04);
+        *dp++ = 0xE7;                       // QOIR_OP_RGBA4
+        *dp++ = ((delta[0] + 8) << 0x00) |  //
+                ((delta[1] + 8) << 0x04);   //
+        *dp++ = ((delta[2] + 8) << 0x00) |  //
+                ((delta[3] + 8) << 0x04);
       } else {
         *dp++ = 0xEF;  // QOIR_OP_RGBA8
-        *dp++ = d0;
-        *dp++ = d1;
-        *dp++ = d2;
-        *dp++ = d3;
+        *dp++ = delta[0];
+        *dp++ = delta[1];
+        *dp++ = delta[2];
+        *dp++ = delta[3];
       }
     }
   }
