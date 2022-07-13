@@ -1009,7 +1009,7 @@ qoir_private_decode_tile_opcodes(  //
       dp += 4;
 
     } else {  // QOIR_OP_A8
-      pixel[3] = (uint8_t)(s64 >> 0x08);
+      pixel[3] += (uint8_t)(s64 >> 0x08);
       sp += 2;
       memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
       memcpy(dp, pixel, 4);
@@ -1435,7 +1435,7 @@ qoir_private_encode_tile_opcodes(  //
 
     } else if ((d0 | d1 | d2) == 0) {
       *dp++ = 0xFF;  // QOIR_OP_A8
-      *dp++ = sp[3];
+      *dp++ = d3;
 
     } else {
       uint8_t dist = dists[d0] | dists[d1] | dists[d2] | dists[d3];
