@@ -1,5 +1,5 @@
 *.exe
 *.out
 *~
-/gen
+/out
 images

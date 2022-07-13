@@ -3,8 +3,8 @@
 CC=${CC:-gcc}
 CFLAGS=${CFLAGS:--Wall}
 
-mkdir -p gen
+mkdir -p out
 echo Compiling...
-$CC $CFLAGS test/unit_tests.c -o gen/unit_tests
+$CC $CFLAGS test/unit_tests.c -o out/unit_tests
 echo Running...
-gen/unit_tests
+out/unit_tests
