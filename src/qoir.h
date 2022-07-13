@@ -322,6 +322,14 @@ qoir_encode(                          //
 #define QOIR_ALWAYS_INLINE inline
 #endif
 
+#if !defined(QOIR_CONFIG__DISABLE_SIMD)
+#if (defined(__GNUC__) && defined(__x86_64__)) || \
+    (defined(_MSC_VER) && defined(_M_X64))
+#define QOIR_USE_SIMD_SSE2
+#include <emmintrin.h>
+#endif
+#endif
+
 // Normally, the qoir_private_peek_etc and qoir_private_poke_etc
 // implementations are both (1) correct regardless of CPU endianness and (2)
 // very fast (e.g. an inlined qoir_private_peek_u32le call, in an optimized
@@ -911,10 +919,20 @@ qoir_private_decode_tile_opcodes(  //
     }
 
     uint8_t pixel[4];
+#if defined(QOIR_USE_SIMD_SSE2)
+    int pred32l;  // Pixel left.
+    int pred32a;  // Pixel above.
+    memcpy(&pred32l, dp - 4, 4);
+    memcpy(&pred32a, dp - (4 * QOIR_TILE_SIZE), 4);
+    int pred32avg = _mm_cvtsi128_si32(
+        _mm_avg_epu8(_mm_cvtsi32_si128(pred32l), _mm_cvtsi32_si128(pred32a)));
+    memcpy(pixel, &pred32avg, 4);
+#else
     pixel[0] = (1 + dp[-4 + 0] + dp[(-4 * QOIR_TILE_SIZE) + 0]) / 2;
     pixel[1] = (1 + dp[-4 + 1] + dp[(-4 * QOIR_TILE_SIZE) + 1]) / 2;
     pixel[2] = (1 + dp[-4 + 2] + dp[(-4 * QOIR_TILE_SIZE) + 2]) / 2;
     pixel[3] = (1 + dp[-4 + 3] + dp[(-4 * QOIR_TILE_SIZE) + 3]) / 2;
+#endif
 
     uint64_t s64 = qoir_private_peek_u64le(sp);
     if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_RGB8
@@ -1726,6 +1744,7 @@ qoir_encode(                          //
 #undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
+#undef QOIR_USE_SIMD_SSE2
 
 // ================================ -Private Implementation
 
