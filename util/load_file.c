@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef INCLUDE_GUARD_UTIL_LOAD_FILE
+#define INCLUDE_GUARD_UTIL_LOAD_FILE
+
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -96,3 +99,5 @@ load_file(FILE* f, uint64_t max_incl_len) {
   result.truncated = truncated;
   return result;
 }
+
+#endif  // INCLUDE_GUARD_ETC

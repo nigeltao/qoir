@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef INCLUDE_GUARD_UTIL_WALK_DIRECTORY
+#define INCLUDE_GUARD_UTIL_WALK_DIRECTORY
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -140,3 +143,5 @@ walk_directory(DIR* d,
   z.path[1] = '\x00';
   return walk_directory_1(&z, d);
 }
+
+#endif  // INCLUDE_GUARD_ETC

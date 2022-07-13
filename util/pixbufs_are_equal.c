@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef INCLUDE_GUARD_UTIL_PIXBUFS_ARE_EQUAL
+#define INCLUDE_GUARD_UTIL_PIXBUFS_ARE_EQUAL
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -40,3 +43,5 @@ pixbufs_are_equal(const qoir_pixel_buffer* pb0, const qoir_pixel_buffer* pb1) {
   }
   return true;
 }
+
+#endif  // INCLUDE_GUARD_ETC
