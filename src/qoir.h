@@ -152,6 +152,10 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 #define QOIR_TILE_SIZE 0x80
 #define QOIR_TILE_SHIFT 7
 
+// QOIR_LITERALS_PRE_PADDING is large enough to hold one row of a tile's
+// pixels, at 4 bytes per pixel.
+#define QOIR_LITERALS_PRE_PADDING (4 * QOIR_TILE_SIZE)
+
 // QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
 #define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
 
@@ -230,7 +234,7 @@ typedef struct qoir_decode_buffer_struct {
     // opcodes has to be before literals, so that (worst case) we can read (and
     // ignore) 8 bytes past the end of the opcodes array. See §
     uint8_t opcodes[4 * QOIR_TS2];
-    uint8_t literals[4 * QOIR_TS2];
+    uint8_t literals[QOIR_LITERALS_PRE_PADDING + (4 * QOIR_TS2)];
   } private_impl;
 } qoir_decode_buffer;
 
@@ -268,7 +272,7 @@ typedef struct qoir_encode_buffer_struct {
     // +64 is for the same reason as §, but the +8 is rounded up to a multiple
     // of a typical cache line size.
     uint8_t opcodes[(5 * QOIR_TS2) + 64];
-    uint8_t literals[4 * QOIR_TS2];
+    uint8_t literals[QOIR_LITERALS_PRE_PADDING + (4 * QOIR_TS2)];
   } private_impl;
 } qoir_encode_buffer;
 
@@ -859,6 +863,13 @@ qoir_decode_pixel_configuration(                          //
   return result;
 }
 
+// Callers should pass (QOIR_LITERALS_PRE_PADDING + (4 * tw * th)) for dst_len,
+// so that the decode loop can always refer (by a simple negative offset) to
+// the pixel above the current pixel.
+//
+// Callers should pass (opcode_stream_length + 8) for src_len so that the
+// decode loop can always peek for 8 bytes, even at the end of the stream.
+// Reference: §
 static qoir_size_result            //
 qoir_private_decode_tile_opcodes(  //
     uint8_t* dst_ptr,              //
@@ -867,9 +878,7 @@ qoir_private_decode_tile_opcodes(  //
     size_t src_len) {
   qoir_size_result result = {0};
 
-  // Callers should pass (opcode_stream_length + 8) so that the decode loop can
-  // always peek for 8 bytes, even at the end of the stream. Reference: §
-  if (src_len < 8) {
+  if ((dst_len < QOIR_LITERALS_PRE_PADDING) || (src_len < 8)) {
     result.status_message = qoir_status_message__error_invalid_argument;
     return result;
   }
@@ -888,7 +897,7 @@ qoir_private_decode_tile_opcodes(  //
   pixel[2] = 0x00;
   pixel[3] = 0xFF;
 
-  uint8_t* dp = dst_ptr;
+  uint8_t* dp = dst_ptr + QOIR_LITERALS_PRE_PADDING;
   uint8_t* dq = dst_ptr + dst_len;
   const uint8_t* sp = src_ptr;
   const uint8_t* sq = src_ptr + src_len - 8;
@@ -1047,6 +1056,14 @@ qoir_private_decode_qpix_payload(   //
   }
   size_t num_dst_channels = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
 
+  uint8_t* literals_pre_padding = decbuf->private_impl.literals;
+  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
+    literals_pre_padding[i + 0] = 0x00;
+    literals_pre_padding[i + 1] = 0x00;
+    literals_pre_padding[i + 2] = 0x00;
+    literals_pre_padding[i + 3] = 0xFF;
+  }
+
   // ty, tx, tw and th are the tile's top-left offset, width and height, all
   // measured in pixels.
   for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
@@ -1077,14 +1094,15 @@ qoir_private_decode_qpix_payload(   //
         }
         case 1: {  // Opcodes tile format.
           qoir_size_result r = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals, 4 * tw * th,  //
-              src_ptr, tile_len + 8);                      // See § for +8.
+              decbuf->private_impl.literals,              //
+              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
+              src_ptr, tile_len + 8);                     // See § for +8.
           if (r.status_message) {
             return r.status_message;
-          } else if (r.value != (4 * tw * th)) {
+          } else if (r.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
             return qoir_status_message__error_invalid_data;
           }
-          literals = decbuf->private_impl.literals;
+          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
           break;
         }
         case 2: {  // LZ4-Literals tile format.
@@ -1107,14 +1125,15 @@ qoir_private_decode_qpix_payload(   //
             return qoir_status_message__error_invalid_data;
           }
           qoir_size_result r1 = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals, 4 * tw * th,   //
+              decbuf->private_impl.literals,                //
+              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),    //
               decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
           if (r1.status_message) {
             return r1.status_message;
-          } else if (r1.value != (4 * tw * th)) {
+          } else if (r1.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
             return qoir_status_message__error_invalid_data;
           }
-          literals = decbuf->private_impl.literals;
+          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
           break;
         }
         default:
@@ -1345,9 +1364,9 @@ qoir_private_encode_tile_opcodes(  //
   uint8_t pixel[4];
 
   uint8_t* dp = dst_ptr;
-  const uint8_t* sp = src_data;
-  const uint8_t* sq =
-      src_data + (4 * src_width_in_pixels * src_height_in_pixels);
+  const uint8_t* sp = src_data + QOIR_LITERALS_PRE_PADDING;
+  const uint8_t* sq = src_data + QOIR_LITERALS_PRE_PADDING +
+                      (4 * src_width_in_pixels * src_height_in_pixels);
   while (sp < sq) {
     memcpy(pixel, sp, 4);
 
@@ -1499,6 +1518,14 @@ qoir_private_encode_qpix_payload(  //
       qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
   uint8_t* dp = dst_ptr;
 
+  uint8_t* literals_pre_padding = encbuf->private_impl.literals;
+  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
+    literals_pre_padding[i + 0] = 0x00;
+    literals_pre_padding[i + 1] = 0x00;
+    literals_pre_padding[i + 2] = 0x00;
+    literals_pre_padding[i + 3] = 0xFF;
+  }
+
   // ty, tx, tw and th are the tile's top-left offset, width and height, all
   // measured in pixels.
   for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
@@ -1511,8 +1538,9 @@ qoir_private_encode_qpix_payload(  //
       const uint8_t* sp = src_pixbuf->data +
                           (src_pixbuf->stride_in_bytes * ty) +
                           (num_src_channels * tx);
-      (*swizzle)(encbuf->private_impl.literals, 4 * tw,  //
-                 sp, src_pixbuf->stride_in_bytes,        //
+      (*swizzle)(encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+                 4 * tw,                           //
+                 sp, src_pixbuf->stride_in_bytes,  //
                  tw, th);
 
       qoir_size_result r0 = qoir_private_encode_tile_opcodes(
@@ -1524,14 +1552,17 @@ qoir_private_encode_qpix_payload(  //
       size_t literals_len = 4 * tw * th;
       if (r0.value >= literals_len) {
         // Use the Literals or LZ4-Literals tile format.
-        qoir_size_result r1 =
-            qoir_lz4_block_encode(dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
-                                  encbuf->private_impl.literals, literals_len);
+        qoir_size_result r1 = qoir_lz4_block_encode(
+            dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
+            encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+            literals_len);
         if (!r1.status_message && (r1.value < r0.value)) {
           qoir_private_poke_u32le(dp, 0x02000000 | (uint32_t)r1.value);
           dp += 4 + r1.value;
         } else {
-          memcpy(dp + 4, encbuf->private_impl.literals, literals_len);
+          memcpy(dp + 4,
+                 encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+                 literals_len);
           qoir_private_poke_u32le(dp, 0x00000000 | (uint32_t)literals_len);
           dp += 4 + literals_len;
         }
