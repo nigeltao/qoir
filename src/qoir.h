@@ -1421,10 +1421,28 @@ qoir_private_encode_tile_opcodes(           //
     }
 
     memcpy(color_cache[hash], sp, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+    int curr32;   // Current pixel.
+    int pred32l;  // Pixel left.
+    int pred32a;  // Pixel above.
+    memcpy(&curr32, sp, 4);
+    memcpy(&pred32l, sp - 4, 4);
+    memcpy(&pred32a, sp - (4 * QOIR_TILE_SIZE), 4);
+    int delta32 = _mm_cvtsi128_si32(_mm_sub_epi8(
+        _mm_cvtsi32_si128(curr32),
+        _mm_avg_epu8(_mm_cvtsi32_si128(pred32l), _mm_cvtsi32_si128(pred32a))));
+    uint8_t delta[4];
+    memcpy(delta, &delta32, 4);
+    uint8_t d0 = delta[0];
+    uint8_t d1 = delta[1];
+    uint8_t d2 = delta[2];
+    uint8_t d3 = delta[3];
+#else
     uint8_t d0 = sp[0] - ((1 + sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
     uint8_t d1 = sp[1] - ((1 + sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
     uint8_t d2 = sp[2] - ((1 + sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
     uint8_t d3 = sp[3] - ((1 + sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
+#endif
 
     if (!has_alpha || (d3 == 0)) {
       uint8_t dist02 = dists[d0] | dists[d2];
