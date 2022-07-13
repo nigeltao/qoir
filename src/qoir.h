@@ -1372,92 +1372,91 @@ qoir_private_encode_tile_opcodes(  //
         *dp++ = 0xFF;
         run_length = 0;
       }
+      continue;
+    }
 
-    } else {
-      if (run_length > 0) {
-        if (run_length <= 26) {
-          *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
-          run_length = 0;
-        } else {
-          *dp++ = 0xD7;  // QOIR_OP_RUNL
-          *dp++ = (uint8_t)(run_length - 1);
-          run_length = 0;
-        }
+    if (run_length > 0) {
+      if (run_length <= 26) {
+        *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
+        run_length = 0;
+      } else {
+        *dp++ = 0xD7;  // QOIR_OP_RUNL
+        *dp++ = (uint8_t)(run_length - 1);
+        run_length = 0;
       }
+    }
 
-      uint32_t hash = qoir_private_hash(sp);
-      if (!memcmp(color_cache[hash], sp, 4)) {
-        *dp++ = (uint8_t)(0x00 | (hash << 0x02));  // QOIR_OP_INDEX
+    uint32_t hash = qoir_private_hash(sp);
+    if (!memcmp(color_cache[hash], sp, 4)) {
+      *dp++ = (uint8_t)(0x00 | (hash << 0x02));  // QOIR_OP_INDEX
+      continue;
+    }
+
+    memcpy(color_cache[hash], sp, 4);
+    uint8_t d0 = sp[0] - ((sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
+    uint8_t d1 = sp[1] - ((sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
+    uint8_t d2 = sp[2] - ((sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
+    uint8_t d3 = sp[3] - ((sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
+
+    if (d3 == 0) {
+      uint8_t dist02 = dists[d0] | dists[d2];
+      uint8_t dist1 = dists[d1];
+      uint8_t dist = dist02 | dist1;
+
+      uint8_t d0d1 = d0 - d1;
+      uint8_t d2d1 = d2 - d1;
+
+      if (dist < 0x04) {
+        *dp++ = 0x01 |                // QOIR_OP_RGB2
+                ((d0 + 2) << 0x02) |  //
+                ((d1 + 2) << 0x04) |  //
+                ((d2 + 2) << 0x06);
+
+      } else if ((dist1 < 0x40) && ((dists[d0d1] | dists[d2d1]) < 0x10)) {
+        *dp++ = 0x02 |                       // QOIR_OP_LUMA
+                (((d1 + 0x20)) << 0x02);     //
+        *dp++ = (((d0d1 + 0x08)) << 0x00) |  //
+                (((d2d1 + 0x08)) << 0x04);
+
+      } else if (dist < 0x80) {
+        qoir_private_poke_u32le(dp,
+                                0x03 |  // QOIR_OP_RGB7
+                                    ((uint32_t)(uint8_t)(d0 + 0x40) << 0x03) |
+                                    ((uint32_t)(uint8_t)(d1 + 0x40) << 0x0A) |
+                                    ((uint32_t)(uint8_t)(d2 + 0x40) << 0x11));
+        dp += 3;
 
       } else {
-        memcpy(color_cache[hash], sp, 4);
-        uint8_t d0 = sp[0] - ((sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
-        uint8_t d1 = sp[1] - ((sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
-        uint8_t d2 = sp[2] - ((sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
-        uint8_t d3 = sp[3] - ((sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
+        *dp++ = 0xF7;  // QOIR_OP_RGB8
+        *dp++ = d0;
+        *dp++ = d1;
+        *dp++ = d2;
+      }
 
-        if (d3 == 0) {
-          uint8_t dist02 = dists[d0] | dists[d2];
-          uint8_t dist1 = dists[d1];
-          uint8_t dist = dist02 | dist1;
+    } else if ((d0 | d1 | d2) == 0) {
+      *dp++ = 0xFF;  // QOIR_OP_A8
+      *dp++ = sp[3];
 
-          uint8_t d0d1 = d0 - d1;
-          uint8_t d2d1 = d2 - d1;
-
-          if (dist < 0x04) {
-            *dp++ = 0x01 |                // QOIR_OP_RGB2
-                    ((d0 + 2) << 0x02) |  //
-                    ((d1 + 2) << 0x04) |  //
-                    ((d2 + 2) << 0x06);
-
-          } else if ((dist1 < 0x40) && ((dists[d0d1] | dists[d2d1]) < 0x10)) {
-            *dp++ = 0x02 |                       // QOIR_OP_LUMA
-                    (((d1 + 0x20)) << 0x02);     //
-            *dp++ = (((d0d1 + 0x08)) << 0x00) |  //
-                    (((d2d1 + 0x08)) << 0x04);
-
-          } else if (dist < 0x80) {
-            qoir_private_poke_u32le(
-                dp,
-                0x03 |  // QOIR_OP_RGB7
-                    ((uint32_t)(uint8_t)(d0 + 0x40) << 0x03) |
-                    ((uint32_t)(uint8_t)(d1 + 0x40) << 0x0A) |
-                    ((uint32_t)(uint8_t)(d2 + 0x40) << 0x11));
-            dp += 3;
-
-          } else {
-            *dp++ = 0xF7;  // QOIR_OP_RGB8
-            *dp++ = d0;
-            *dp++ = d1;
-            *dp++ = d2;
-          }
-
-        } else if ((d0 | d1 | d2) == 0) {
-          *dp++ = 0xFF;  // QOIR_OP_A8
-          *dp++ = sp[3];
-
-        } else {
-          uint8_t dist = dists[d0] | dists[d1] | dists[d2] | dists[d3];
-          if (dist < 0x04) {
-            *dp++ = 0xDF;                 // QOIR_OP_RGBA2
-            *dp++ = ((d0 + 2) << 0x00) |  //
-                    ((d1 + 2) << 0x02) |  //
-                    ((d2 + 2) << 0x04) |  //
-                    ((d3 + 2) << 0x06);
-          } else if (dist < 0x10) {
-            *dp++ = 0xE7;                 // QOIR_OP_RGBA4
-            *dp++ = ((d0 + 8) << 0x00) |  //
-                    ((d1 + 8) << 0x04);   //
-            *dp++ = ((d2 + 8) << 0x00) |  //
-                    ((d3 + 8) << 0x04);
-          } else {
-            *dp++ = 0xEF;  // QOIR_OP_RGBA8
-            *dp++ = d0;
-            *dp++ = d1;
-            *dp++ = d2;
-            *dp++ = d3;
-          }
-        }
+    } else {
+      uint8_t dist = dists[d0] | dists[d1] | dists[d2] | dists[d3];
+      if (dist < 0x04) {
+        *dp++ = 0xDF;                 // QOIR_OP_RGBA2
+        *dp++ = ((d0 + 2) << 0x00) |  //
+                ((d1 + 2) << 0x02) |  //
+                ((d2 + 2) << 0x04) |  //
+                ((d3 + 2) << 0x06);
+      } else if (dist < 0x10) {
+        *dp++ = 0xE7;                 // QOIR_OP_RGBA4
+        *dp++ = ((d0 + 8) << 0x00) |  //
+                ((d1 + 8) << 0x04);   //
+        *dp++ = ((d2 + 8) << 0x00) |  //
+                ((d3 + 8) << 0x04);
+      } else {
+        *dp++ = 0xEF;  // QOIR_OP_RGBA8
+        *dp++ = d0;
+        *dp++ = d1;
+        *dp++ = d2;
+        *dp++ = d3;
       }
     }
   }
