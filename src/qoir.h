@@ -911,10 +911,10 @@ qoir_private_decode_tile_opcodes(  //
     }
 
     uint8_t pixel[4];
-    pixel[0] = (dp[-4 + 0] + dp[(-4 * QOIR_TILE_SIZE) + 0]) / 2;
-    pixel[1] = (dp[-4 + 1] + dp[(-4 * QOIR_TILE_SIZE) + 1]) / 2;
-    pixel[2] = (dp[-4 + 2] + dp[(-4 * QOIR_TILE_SIZE) + 2]) / 2;
-    pixel[3] = (dp[-4 + 3] + dp[(-4 * QOIR_TILE_SIZE) + 3]) / 2;
+    pixel[0] = (1 + dp[-4 + 0] + dp[(-4 * QOIR_TILE_SIZE) + 0]) / 2;
+    pixel[1] = (1 + dp[-4 + 1] + dp[(-4 * QOIR_TILE_SIZE) + 1]) / 2;
+    pixel[2] = (1 + dp[-4 + 2] + dp[(-4 * QOIR_TILE_SIZE) + 2]) / 2;
+    pixel[3] = (1 + dp[-4 + 3] + dp[(-4 * QOIR_TILE_SIZE) + 3]) / 2;
 
     uint64_t s64 = qoir_private_peek_u64le(sp);
     if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_RGB8
@@ -1403,10 +1403,10 @@ qoir_private_encode_tile_opcodes(           //
     }
 
     memcpy(color_cache[hash], sp, 4);
-    uint8_t d0 = sp[0] - ((sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
-    uint8_t d1 = sp[1] - ((sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
-    uint8_t d2 = sp[2] - ((sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
-    uint8_t d3 = sp[3] - ((sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
+    uint8_t d0 = sp[0] - ((1 + sp[-4 + 0] + sp[(-4 * QOIR_TILE_SIZE) + 0]) / 2);
+    uint8_t d1 = sp[1] - ((1 + sp[-4 + 1] + sp[(-4 * QOIR_TILE_SIZE) + 1]) / 2);
+    uint8_t d2 = sp[2] - ((1 + sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
+    uint8_t d3 = sp[3] - ((1 + sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
 
     if (!has_alpha || (d3 == 0)) {
       uint8_t dist02 = dists[d0] | dists[d2];
