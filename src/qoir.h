@@ -1311,9 +1311,9 @@ fail_invalid_data:
 static QOIR_ALWAYS_INLINE qoir_size_result  //
 qoir_private_encode_tile_opcodes(           //
     uint8_t* dst_ptr,                       //
-    const uint8_t* src_data,                //
-    uint32_t src_width_in_pixels,           //
-    uint32_t src_height_in_pixels,          //
+    const uint8_t* src_ptr,                 //
+    uint32_t tw,                            //
+    uint32_t th,                            //
     bool has_alpha) {
   // dists holds the log2 distance from zero (with modular arithmetic).
   //  - There is    1 element  such that (dists[i] <   1).
@@ -1371,9 +1371,9 @@ qoir_private_encode_tile_opcodes(           //
   }
 
   uint8_t* dp = dst_ptr;
-  const uint8_t* sp = src_data + QOIR_LITERALS_PRE_PADDING;
-  const uint8_t* sq = src_data + QOIR_LITERALS_PRE_PADDING +
-                      (4 * src_width_in_pixels * src_height_in_pixels);
+  const uint8_t* sp = src_ptr + QOIR_LITERALS_PRE_PADDING;
+  const uint8_t* sq =
+      src_ptr + QOIR_LITERALS_PRE_PADDING + (4 * (size_t)tw * (size_t)th);
   for (; sp < sq; sp += 4) {
     if (!memcmp(sp, sp - 4, 4)) {
       run_length++;
@@ -1489,21 +1489,19 @@ qoir_private_encode_tile_opcodes(           //
 static qoir_size_result                       //
 qoir_private_encode_tile_opcodes_sans_alpha(  //
     uint8_t* dst_ptr,                         //
-    const uint8_t* src_data,                  //
-    uint32_t src_width_in_pixels,             //
-    uint32_t src_height_in_pixels) {
-  return qoir_private_encode_tile_opcodes(
-      dst_ptr, src_data, src_width_in_pixels, src_height_in_pixels, false);
+    const uint8_t* src_ptr,                   //
+    uint32_t tw,                              //
+    uint32_t th) {
+  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, false);
 }
 
 static qoir_size_result                       //
 qoir_private_encode_tile_opcodes_with_alpha(  //
     uint8_t* dst_ptr,                         //
-    const uint8_t* src_data,                  //
-    uint32_t src_width_in_pixels,             //
-    uint32_t src_height_in_pixels) {
-  return qoir_private_encode_tile_opcodes(
-      dst_ptr, src_data, src_width_in_pixels, src_height_in_pixels, true);
+    const uint8_t* src_ptr,                   //
+    uint32_t tw,                              //
+    uint32_t th) {
+  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, true);
 }
 
 static qoir_size_result            //
@@ -1524,10 +1522,10 @@ qoir_private_encode_qpix_payload(  //
   size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
   qoir_private_swizzle_func swizzle = NULL;
-  qoir_size_result (*encode_func)(uint8_t * dst_ptr,             //
-                                  const uint8_t* src_data,       //
-                                  uint32_t src_width_in_pixels,  //
-                                  uint32_t src_height_in_pixels) = NULL;
+  qoir_size_result (*encode_func)(uint8_t * dst_ptr,       //
+                                  const uint8_t* src_ptr,  //
+                                  uint32_t tw,             //
+                                  uint32_t th) = NULL;
   switch (src_pixbuf->pixcfg.pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
       swizzle = qoir_private_swizzle__rgba__rgb;
