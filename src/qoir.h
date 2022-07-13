@@ -1118,14 +1118,15 @@ qoir_private_decode_qpix_payload(   //
         }
         case 2: {  // LZ4-Literals tile format.
           qoir_size_result r = qoir_lz4_block_decode(
-              decbuf->private_impl.literals,
-              sizeof(decbuf->private_impl.literals), src_ptr, tile_len);
+              decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+              sizeof(decbuf->private_impl.literals) - QOIR_LITERALS_PRE_PADDING,
+              src_ptr, tile_len);
           if (r.status_message) {
             return qoir_status_message__error_invalid_data;
           } else if (r.value != (4 * tw * th)) {
             return qoir_status_message__error_invalid_data;
           }
-          literals = decbuf->private_impl.literals;
+          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
           break;
         }
         case 3: {  // LZ4-Opcodes tile format.
