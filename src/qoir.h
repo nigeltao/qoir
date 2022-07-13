@@ -314,6 +314,14 @@ qoir_encode(                          //
 #endif
 #endif
 
+#if defined(__GNUC__)
+#define QOIR_ALWAYS_INLINE inline __attribute__((__always_inline__))
+#elif defined(_MSC_VER)
+#define QOIR_ALWAYS_INLINE __forceinline
+#else
+#define QOIR_ALWAYS_INLINE inline
+#endif
+
 // Normally, the qoir_private_peek_etc and qoir_private_poke_etc
 // implementations are both (1) correct regardless of CPU endianness and (2)
 // very fast (e.g. an inlined qoir_private_peek_u32le call, in an optimized
@@ -1299,12 +1307,13 @@ fail_invalid_data:
 
 // -------- QOIR Encode
 
-static qoir_size_result            //
-qoir_private_encode_tile_opcodes(  //
-    uint8_t* dst_ptr,              //
-    const uint8_t* src_data,       //
-    uint32_t src_width_in_pixels,  //
-    uint32_t src_height_in_pixels) {
+static QOIR_ALWAYS_INLINE qoir_size_result  //
+qoir_private_encode_tile_opcodes(           //
+    uint8_t* dst_ptr,                       //
+    const uint8_t* src_data,                //
+    uint32_t src_width_in_pixels,           //
+    uint32_t src_height_in_pixels,          //
+    bool has_alpha) {
   // dists holds the log2 distance from zero (with modular arithmetic).
   //  - There is    1 element  such that (dists[i] <   1).
   //  - There are   2 elements such that (dists[i] <   2).
@@ -1398,7 +1407,7 @@ qoir_private_encode_tile_opcodes(  //
     uint8_t d2 = sp[2] - ((sp[-4 + 2] + sp[(-4 * QOIR_TILE_SIZE) + 2]) / 2);
     uint8_t d3 = sp[3] - ((sp[-4 + 3] + sp[(-4 * QOIR_TILE_SIZE) + 3]) / 2);
 
-    if (d3 == 0) {
+    if (!has_alpha || (d3 == 0)) {
       uint8_t dist02 = dists[d0] | dists[d2];
       uint8_t dist1 = dists[d1];
       uint8_t dist = dist02 | dist1;
@@ -1476,6 +1485,26 @@ qoir_private_encode_tile_opcodes(  //
   return result;
 }
 
+static qoir_size_result                       //
+qoir_private_encode_tile_opcodes_sans_alpha(  //
+    uint8_t* dst_ptr,                         //
+    const uint8_t* src_data,                  //
+    uint32_t src_width_in_pixels,             //
+    uint32_t src_height_in_pixels) {
+  return qoir_private_encode_tile_opcodes(
+      dst_ptr, src_data, src_width_in_pixels, src_height_in_pixels, false);
+}
+
+static qoir_size_result                       //
+qoir_private_encode_tile_opcodes_with_alpha(  //
+    uint8_t* dst_ptr,                         //
+    const uint8_t* src_data,                  //
+    uint32_t src_width_in_pixels,             //
+    uint32_t src_height_in_pixels) {
+  return qoir_private_encode_tile_opcodes(
+      dst_ptr, src_data, src_width_in_pixels, src_height_in_pixels, true);
+}
+
 static qoir_size_result            //
 qoir_private_encode_qpix_payload(  //
     qoir_encode_buffer* encbuf,    //
@@ -1494,12 +1523,18 @@ qoir_private_encode_qpix_payload(  //
   size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
   qoir_private_swizzle_func swizzle = NULL;
+  qoir_size_result (*encode_func)(uint8_t * dst_ptr,             //
+                                  const uint8_t* src_data,       //
+                                  uint32_t src_width_in_pixels,  //
+                                  uint32_t src_height_in_pixels) = NULL;
   switch (src_pixbuf->pixcfg.pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
       swizzle = qoir_private_swizzle__rgba__rgb;
+      encode_func = qoir_private_encode_tile_opcodes_sans_alpha;
       break;
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
       swizzle = qoir_private_swizzle__copy_4;
+      encode_func = qoir_private_encode_tile_opcodes_with_alpha;
       break;
     default:
       result.status_message = qoir_status_message__error_unsupported_pixfmt;
@@ -1534,7 +1569,7 @@ qoir_private_encode_qpix_payload(  //
                  sp, src_pixbuf->stride_in_bytes,  //
                  tw, th);
 
-      qoir_size_result r0 = qoir_private_encode_tile_opcodes(
+      qoir_size_result r0 = (*encode_func)(
           encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
       if (r0.status_message) {
         result.status_message = r0.status_message;
@@ -1687,6 +1722,7 @@ qoir_encode(                          //
 
 // --------
 
+#undef QOIR_ALWAYS_INLINE
 #undef QOIR_FREE
 #undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
