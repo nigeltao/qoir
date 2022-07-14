@@ -418,6 +418,17 @@ qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
   ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) +   \
    ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) / 255) + 16)
 
+// -------- SWAR (SIMD Within a Register)
+
+// These treat a u32 as a 4xu8 vector.
+
+// QOIR_SWAR_PAVGB returns ((a + b + 1) / 2).
+#define QOIR_SWAR_PAVGB(a, b) ((a | b) - (((a ^ b) >> 1) & 0x7F7F7F7F))
+
+// QOIR_SWAR_PSUBB returns (a - b).
+#define QOIR_SWAR_PSUBB(a, b) \
+  ((a | 0x80808080) - (b & 0x7F7F7F7F)) ^ ((a ^ ~b) & 0x80808080)
+
 // -------- Memory Management
 
 #define QOIR_MALLOC(len)                                                \
@@ -918,6 +929,9 @@ qoir_private_decode_tile_opcodes(  //
       return result;
     }
 
+    // Either code path is equivalent to (but faster than):
+    //   pixel[i] = (1 + dp[-4 + i] + dp[(-4 * QOIR_TILE_SIZE) + i]) / 2;
+    // for i in 0..4.
     uint8_t pixel[4];
 #if defined(QOIR_USE_SIMD_SSE2)
     int pred32l;  // Pixel left.
@@ -928,10 +942,9 @@ qoir_private_decode_tile_opcodes(  //
         _mm_avg_epu8(_mm_cvtsi32_si128(pred32l), _mm_cvtsi32_si128(pred32a)));
     memcpy(pixel, &pred32avg, 4);
 #else
-    pixel[0] = (1 + dp[-4 + 0] + dp[(-4 * QOIR_TILE_SIZE) + 0]) / 2;
-    pixel[1] = (1 + dp[-4 + 1] + dp[(-4 * QOIR_TILE_SIZE) + 1]) / 2;
-    pixel[2] = (1 + dp[-4 + 2] + dp[(-4 * QOIR_TILE_SIZE) + 2]) / 2;
-    pixel[3] = (1 + dp[-4 + 3] + dp[(-4 * QOIR_TILE_SIZE) + 3]) / 2;
+    uint32_t pred32l = qoir_private_peek_u32le(dp - 4);
+    uint32_t pred32a = qoir_private_peek_u32le(dp - (4 * QOIR_TILE_SIZE));
+    qoir_private_poke_u32le(pixel, QOIR_SWAR_PAVGB(pred32l, pred32a));
 #endif
 
     uint64_t s64 = qoir_private_peek_u64le(sp);
@@ -1760,6 +1773,8 @@ qoir_encode(                          //
 #undef QOIR_FREE
 #undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
+#undef QOIR_SWAR_PAVGB
+#undef QOIR_SWAR_PSUBB
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 #undef QOIR_USE_SIMD_SSE2
 
