@@ -520,10 +520,13 @@ qoir_private_swizzle__rgb__rgba(           //
     size_t height_in_pixels) {
   for (; height_in_pixels > 0; height_in_pixels--) {
     for (size_t n = width_in_pixels; n > 0; n--) {
-      *dst_ptr++ = *src_ptr++;
-      *dst_ptr++ = *src_ptr++;
-      *dst_ptr++ = *src_ptr++;
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
       src_ptr++;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s2;
     }
     dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
     src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
@@ -540,9 +543,12 @@ qoir_private_swizzle__rgba__rgb(           //
     size_t height_in_pixels) {
   for (; height_in_pixels > 0; height_in_pixels--) {
     for (size_t n = width_in_pixels; n > 0; n--) {
-      *dst_ptr++ = *src_ptr++;
-      *dst_ptr++ = *src_ptr++;
-      *dst_ptr++ = *src_ptr++;
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s2;
       *dst_ptr++ = 0xFF;
     }
     dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
