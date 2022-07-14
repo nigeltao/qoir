@@ -51,7 +51,7 @@ After the prefix are EncodedTileLength bytes whose interpretation depends on
 the EncodedTileFormat:
 
 - 0x00 "Literals tile format" means that the encoded tile bytes are literally
-  RGBA values (with no compression).
+  BGRA values (with no compression).
 - 0x01 "Opcodes tile format" means that the encoded tile bytes are pixel
   opcodes (see below).
 - 0x02 "LZ4-Literals tile format" means that the encoded tile bytes are LZ4
@@ -70,15 +70,15 @@ used in QOIR encoded tiles, a decompressed size above 65536 is invalid.
 
 TODO: add more details.
 
-    i=index, r=red, g=green, b=blue, a=alpha, s=r-g, c=b-g, n=run_length
+    i=index, b=blue, g=green, r=red, a=alpha, c=b-g, s=r-g, n=run_length
     QOIR_OP_INDEX  iiiiii00
-    QOIR_OP_RGB2   bbggrr01
-    QOIR_OP_LUMA   gggggg10 ccccssss
-    QOIR_OP_RGB7   rrrrr011 ggggggrr bbbbbbbg
+    QOIR_OP_BGR2   rrggbb01
+    QOIR_OP_LUMA   gggggg10 sssscccc
+    QOIR_OP_BGR7   bbbbb011 ggggggbb rrrrrrrg
     QOIR_OP_RUNS   nnnnn111
     QOIR_OP_RUNL   11010111 nnnnnnnn
-    QOIR_OP_RGBA2  11011111 aabbggrr
-    QOIR_OP_RGBA4  11100111 ggggrrrr aaaabbbb
-    QOIR_OP_RGBA8  11101111 rrrrrrrr gggggggg bbbbbbbb aaaaaaaa
-    QOIR_OP_RGB8   11110111 rrrrrrrr gggggggg bbbbbbbb
+    QOIR_OP_BGRA2  11011111 aarrggbb
+    QOIR_OP_BGRA4  11100111 ggggbbbb aaaarrrr
+    QOIR_OP_BGRA8  11101111 bbbbbbbb gggggggg rrrrrrrr aaaaaaaa
+    QOIR_OP_BGR8   11110111 bbbbbbbb gggggggg rrrrrrrr
     QOIR_OP_A8     11111111 aaaaaaaa

@@ -268,7 +268,7 @@ typedef struct qoir_encode_buffer_struct {
   struct {
     // opcodes' size is ((5 * QOIR_TS2) + 64), not (4 * QOIR_TS2), because in
     // the worst case (during encoding, before discarding the too-long opcodes
-    // in favor of literals), each pixel uses QOIR_OP_RGBA8, 5 bytes each. The
+    // in favor of literals), each pixel uses QOIR_OP_BGRA8, 5 bytes each. The
     // +64 is for the same reason as §, but the +8 is rounded up to a multiple
     // of a typical cache line size.
     uint8_t opcodes[(5 * QOIR_TS2) + 64];
@@ -511,7 +511,7 @@ qoir_private_swizzle__copy_4(              //
 }
 
 static void                                //
-qoir_private_swizzle__rgb__rgba(           //
+qoir_private_swizzle__bgr__bgra(           //
     uint8_t* QOIR_RESTRICT dst_ptr,        //
     size_t dst_stride_in_bytes,            //
     const uint8_t* QOIR_RESTRICT src_ptr,  //
@@ -534,7 +534,30 @@ qoir_private_swizzle__rgb__rgba(           //
 }
 
 static void                                //
-qoir_private_swizzle__rgba__rgb(           //
+qoir_private_swizzle__bgr__rgba(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__bgr(           //
     uint8_t* QOIR_RESTRICT dst_ptr,        //
     size_t dst_stride_in_bytes,            //
     const uint8_t* QOIR_RESTRICT src_ptr,  //
@@ -553,6 +576,53 @@ qoir_private_swizzle__rgba__rgb(           //
     }
     dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
     src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__rgb(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__rgba(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s3;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
   }
 }
 
@@ -954,7 +1024,7 @@ qoir_private_decode_tile_opcodes(  //
 #endif
 
     uint64_t s64 = qoir_private_peek_u64le(sp);
-    if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_RGB8
+    if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_BGR8
       pixel[0] += (uint8_t)(s64 >> 0x08);
       pixel[1] += (uint8_t)(s64 >> 0x10);
       pixel[2] += (uint8_t)(s64 >> 0x18);
@@ -969,7 +1039,7 @@ qoir_private_decode_tile_opcodes(  //
       memcpy(dp, pixel, 4);
       dp += 4;
 
-    } else if ((s64 & 0x03) == 1) {  // QOIR_OP_RGB2
+    } else if ((s64 & 0x03) == 1) {  // QOIR_OP_BGR2
       pixel[0] += ((s64 >> 0x02) & 0x03) - 2;
       pixel[1] += ((s64 >> 0x04) & 0x03) - 2;
       pixel[2] += ((s64 >> 0x06) & 0x03) - 2;
@@ -988,7 +1058,7 @@ qoir_private_decode_tile_opcodes(  //
       memcpy(dp, pixel, 4);
       dp += 4;
 
-    } else if ((s64 & 0x07) == 3) {  // QOIR_OP_RGB7
+    } else if ((s64 & 0x07) == 3) {  // QOIR_OP_BGR7
       pixel[0] += ((s64 >> 0x03) & 0x7F) - 0x40;
       pixel[1] += ((s64 >> 0x0A) & 0x7F) - 0x40;
       pixel[2] += ((s64 >> 0x11) & 0x7F) - 0x40;
@@ -1023,7 +1093,7 @@ qoir_private_decode_tile_opcodes(  //
       } while (run_length--);
       sp += 2;
 
-    } else if ((s64 & 0xFF) == 0xDF) {  // QOIR_OP_RGBA2
+    } else if ((s64 & 0xFF) == 0xDF) {  // QOIR_OP_BGRA2
       pixel[0] += ((s64 >> 0x08) & 0x03) - 2;
       pixel[1] += ((s64 >> 0x0A) & 0x03) - 2;
       pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
@@ -1033,7 +1103,7 @@ qoir_private_decode_tile_opcodes(  //
       memcpy(dp, pixel, 4);
       dp += 4;
 
-    } else if ((s64 & 0xFF) == 0xE7) {  // QOIR_OP_RGBA4
+    } else if ((s64 & 0xFF) == 0xE7) {  // QOIR_OP_BGRA4
       pixel[0] += ((s64 >> 0x08) & 0x0F) - 8;
       pixel[1] += ((s64 >> 0x0C) & 0x0F) - 8;
       pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
@@ -1043,7 +1113,7 @@ qoir_private_decode_tile_opcodes(  //
       memcpy(dp, pixel, 4);
       dp += 4;
 
-    } else if ((s64 & 0xFF) == 0xEF) {  // QOIR_OP_RGBA8
+    } else if ((s64 & 0xFF) == 0xEF) {  // QOIR_OP_BGRA8
       pixel[0] += (uint8_t)(s64 >> 0x08);
       pixel[1] += (uint8_t)(s64 >> 0x10);
       pixel[2] += (uint8_t)(s64 >> 0x18);
@@ -1091,13 +1161,23 @@ qoir_private_decode_qpix_payload(   //
   size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
   size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
-  qoir_private_swizzle_func swizzle = NULL;
+  qoir_private_swizzle_func swizzle_func = NULL;
   switch (dst_pixfmt) {
-    case QOIR_PIXEL_FORMAT__RGB:
-      swizzle = qoir_private_swizzle__rgb__rgba;
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      swizzle_func = qoir_private_swizzle__copy_4;
       break;
+    case QOIR_PIXEL_FORMAT__BGR:
+      swizzle_func = qoir_private_swizzle__bgr__bgra;
+      break;
+    case QOIR_PIXEL_FORMAT__RGBX:
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-      swizzle = qoir_private_swizzle__copy_4;
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      swizzle_func = qoir_private_swizzle__bgra__rgba;
+      break;
+    case QOIR_PIXEL_FORMAT__RGB:
+      swizzle_func = qoir_private_swizzle__bgr__rgba;
       break;
     default:
       return qoir_status_message__error_unsupported_pixfmt;
@@ -1194,7 +1274,7 @@ qoir_private_decode_qpix_payload(   //
 
       uint8_t* dp =
           dst_data + (dst_stride_in_bytes * ty) + (num_dst_channels * tx);
-      (*swizzle)(dp, dst_stride_in_bytes, literals, 4 * tw, tw, th);
+      (*swizzle_func)(dp, dst_stride_in_bytes, literals, 4 * tw, tw, th);
     }
   }
 
@@ -1473,7 +1553,7 @@ qoir_private_encode_tile_opcodes(           //
       uint8_t d2d1 = delta[2] - delta[1];
 
       if (dist < 0x04) {
-        *dp++ = 0x01 |                      // QOIR_OP_RGB2
+        *dp++ = 0x01 |                      // QOIR_OP_BGR2
                 ((delta[0] + 2) << 0x02) |  //
                 ((delta[1] + 2) << 0x04) |  //
                 ((delta[2] + 2) << 0x06);
@@ -1487,14 +1567,14 @@ qoir_private_encode_tile_opcodes(           //
       } else if (dist < 0x80) {
         qoir_private_poke_u32le(
             dp,
-            0x03 |  // QOIR_OP_RGB7
+            0x03 |  // QOIR_OP_BGR7
                 ((uint32_t)(uint8_t)(delta[0] + 0x40) << 0x03) |
                 ((uint32_t)(uint8_t)(delta[1] + 0x40) << 0x0A) |
                 ((uint32_t)(uint8_t)(delta[2] + 0x40) << 0x11));
         dp += 3;
 
       } else {
-        *dp++ = 0xF7;  // QOIR_OP_RGB8
+        *dp++ = 0xF7;  // QOIR_OP_BGR8
         *dp++ = delta[0];
         *dp++ = delta[1];
         *dp++ = delta[2];
@@ -1508,19 +1588,19 @@ qoir_private_encode_tile_opcodes(           //
       uint8_t dist =
           dists[delta[0]] | dists[delta[1]] | dists[delta[2]] | dists[delta[3]];
       if (dist < 0x04) {
-        *dp++ = 0xDF;                       // QOIR_OP_RGBA2
+        *dp++ = 0xDF;                       // QOIR_OP_BGRA2
         *dp++ = ((delta[0] + 2) << 0x00) |  //
                 ((delta[1] + 2) << 0x02) |  //
                 ((delta[2] + 2) << 0x04) |  //
                 ((delta[3] + 2) << 0x06);
       } else if (dist < 0x10) {
-        *dp++ = 0xE7;                       // QOIR_OP_RGBA4
+        *dp++ = 0xE7;                       // QOIR_OP_BGRA4
         *dp++ = ((delta[0] + 8) << 0x00) |  //
                 ((delta[1] + 8) << 0x04);   //
         *dp++ = ((delta[2] + 8) << 0x00) |  //
                 ((delta[3] + 8) << 0x04);
       } else {
-        *dp++ = 0xEF;  // QOIR_OP_RGBA8
+        *dp++ = 0xEF;  // QOIR_OP_BGRA8
         *dp++ = delta[0];
         *dp++ = delta[1];
         *dp++ = delta[2];
@@ -1579,24 +1659,39 @@ qoir_private_encode_qpix_payload(  //
   size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
   size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
-  qoir_private_swizzle_func swizzle = NULL;
-  qoir_size_result (*encode_func)(uint8_t * dst_ptr,       //
-                                  const uint8_t* src_ptr,  //
-                                  uint32_t tw,             //
-                                  uint32_t th) = NULL;
+  qoir_private_swizzle_func swizzle_func = NULL;
   switch (src_pixbuf->pixcfg.pixfmt) {
-    case QOIR_PIXEL_FORMAT__RGB:
-      swizzle = qoir_private_swizzle__rgba__rgb;
-      encode_func = qoir_private_encode_tile_opcodes_sans_alpha;
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      swizzle_func = qoir_private_swizzle__copy_4;
       break;
+    case QOIR_PIXEL_FORMAT__BGR:
+      swizzle_func = qoir_private_swizzle__bgra__bgr;
+      break;
+    case QOIR_PIXEL_FORMAT__RGBX:
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-      swizzle = qoir_private_swizzle__copy_4;
-      encode_func = qoir_private_encode_tile_opcodes_with_alpha;
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      swizzle_func = qoir_private_swizzle__bgra__rgba;
+      break;
+    case QOIR_PIXEL_FORMAT__RGB:
+      swizzle_func = qoir_private_swizzle__bgra__rgb;
       break;
     default:
       result.status_message = qoir_status_message__error_unsupported_pixfmt;
       return result;
   }
+
+  qoir_size_result (*encode_func)(uint8_t * dst_ptr,       //
+                                  const uint8_t* src_ptr,  //
+                                  uint32_t tw,             //
+                                  uint32_t th) =
+      ((src_pixbuf->pixcfg.pixfmt &
+        QOIR_PIXEL_FORMAT__MASK_FOR_ALPHA_TRANSPARENCY) ==
+       QOIR_PIXEL_ALPHA_TRANSPARENCY__OPAQUE)
+          ? qoir_private_encode_tile_opcodes_sans_alpha
+          : qoir_private_encode_tile_opcodes_with_alpha;
+
   size_t num_src_channels =
       qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
   uint8_t* dp = dst_ptr;
@@ -1621,10 +1716,10 @@ qoir_private_encode_qpix_payload(  //
       const uint8_t* sp = src_pixbuf->data +
                           (src_pixbuf->stride_in_bytes * ty) +
                           (num_src_channels * tx);
-      (*swizzle)(encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
-                 4 * tw,                           //
-                 sp, src_pixbuf->stride_in_bytes,  //
-                 tw, th);
+      (*swizzle_func)(encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+                      4 * tw,                           //
+                      sp, src_pixbuf->stride_in_bytes,  //
+                      tw, th);
 
       qoir_size_result r0 = (*encode_func)(
           encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
