@@ -405,12 +405,6 @@ static uint8_t qoir_private_table_luma[65536];
 #endif
 
 static inline uint32_t  //
-qoir_private_hash(const uint8_t* p) {
-  // 2654435761u is Knuth's magic constant. 6 is log2(color_cache_size).
-  return (qoir_private_peek_u32le(p) * 2654435761u) >> (32 - 6);
-}
-
-static inline uint32_t  //
 qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
   return interior ? QOIR_TILE_SIZE
                   : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
@@ -1002,6 +996,7 @@ qoir_private_decode_tile_opcodes(  //
     color_cache[i][2] = 0x00;
     color_cache[i][3] = 0xFF;
   }
+  uint32_t next_color_index = 0;
 
   uint8_t* dp = dst_ptr + QOIR_LITERALS_PRE_PADDING;
   uint8_t* dq = dst_ptr + dst_len;
@@ -1035,7 +1030,7 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += (uint8_t)(s64 >> 0x10);
       pixel[2] += (uint8_t)(s64 >> 0x18);
       sp += 4;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1050,7 +1045,7 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += ((s64 >> 0x04) & 0x03) - 2;
       pixel[2] += ((s64 >> 0x06) & 0x03) - 2;
       sp += 1;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1074,7 +1069,7 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += delta_g - 8 + ((s64 >> 0x0C) & 0x0F);
 #endif
       sp += 2;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1083,7 +1078,7 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += ((s64 >> 0x0A) & 0x7F) - 0x40;
       pixel[2] += ((s64 >> 0x11) & 0x7F) - 0x40;
       sp += 3;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1119,7 +1114,7 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
       pixel[3] += ((s64 >> 0x0E) & 0x03) - 2;
       sp += 2;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1129,7 +1124,7 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
       pixel[3] += ((s64 >> 0x14) & 0x0F) - 8;
       sp += 3;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1139,14 +1134,14 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += (uint8_t)(s64 >> 0x18);
       pixel[3] += (uint8_t)(s64 >> 0x20);
       sp += 5;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else {  // QOIR_OP_A8
       pixel[3] += (uint8_t)(s64 >> 0x08);
       sp += 2;
-      memcpy(color_cache[qoir_private_hash(pixel)], pixel, 4);
+      memcpy(color_cache[63 & next_color_index++], pixel, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
     }
@@ -1445,6 +1440,8 @@ fail_invalid_data:
 
 // -------- QOIR Encode
 
+#define QOIR_HASH_TABLE_SIZE 10
+
 static QOIR_ALWAYS_INLINE qoir_size_result  //
 qoir_private_encode_tile_opcodes(           //
     uint8_t* dst_ptr,                       //
@@ -1508,6 +1505,8 @@ qoir_private_encode_tile_opcodes(           //
     color_cache[i][2] = 0x00;
     color_cache[i][3] = 0xFF;
   }
+  uint32_t next_color_index = 0;
+  uint8_t color_indexes[1 << QOIR_HASH_TABLE_SIZE] = {0};
 
   uint8_t* dp = dst_ptr;
   const uint8_t* sp = src_ptr + QOIR_LITERALS_PRE_PADDING;
@@ -1535,13 +1534,18 @@ qoir_private_encode_tile_opcodes(           //
       }
     }
 
-    uint32_t hash = qoir_private_hash(sp);
-    if (!memcmp(color_cache[hash], sp, 4)) {
-      *dp++ = (uint8_t)(0x00 | (hash << 0x02));  // QOIR_OP_INDEX
+    // 2654435761u is Knuth's magic constant.
+    uint32_t hash = (qoir_private_peek_u32le(sp) * 2654435761u) >>
+                    (32 - QOIR_HASH_TABLE_SIZE);
+    uint8_t index = color_indexes[hash];
+    if (!memcmp(color_cache[index], sp, 4)) {
+      *dp++ = (uint8_t)(0x00 | (index << 0x02));  // QOIR_OP_INDEX
       continue;
     }
 
-    memcpy(color_cache[hash], sp, 4);
+    color_indexes[hash] = next_color_index;
+    memcpy(color_cache[next_color_index], sp, 4);
+    next_color_index = 63 & (next_color_index + 1);
 
     uint8_t delta[4];
     uint32_t cp8x4;  // Current pixel.
@@ -1895,6 +1899,7 @@ qoir_encode(                          //
 
 #undef QOIR_ALWAYS_INLINE
 #undef QOIR_FREE
+#undef QOIR_HASH_TABLE_SIZE
 #undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
 #undef QOIR_SWAR_PADDB
