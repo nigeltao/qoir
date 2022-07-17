@@ -988,15 +988,17 @@ qoir_private_decode_tile_opcodes(  //
     return result;
   }
 
-  // The array-of-four-uint8_t elements are in B, G, R, A order.
-  uint8_t color_cache[64][4];
-  for (int i = 0; i < 64; i++) {
-    color_cache[i][0] = 0x00;
-    color_cache[i][1] = 0x00;
-    color_cache[i][2] = 0x00;
-    color_cache[i][3] = 0xFF;
+  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
+  // for performance. It is always indexed by a uint8_t value that is a
+  // multiple of four. The four uint8_t elements are in B, G, R, A order.
+  uint8_t color_cache[256];
+  for (int i = 0; i < 256; i += 4) {
+    color_cache[i + 0] = 0x00;
+    color_cache[i + 1] = 0x00;
+    color_cache[i + 2] = 0x00;
+    color_cache[i + 3] = 0xFF;
   }
-  uint32_t next_color_index = 0;
+  uint8_t next_color_index = 0;
 
   uint8_t* dp = dst_ptr + QOIR_LITERALS_PRE_PADDING;
   uint8_t* dq = dst_ptr + dst_len;
@@ -1030,13 +1032,14 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += (uint8_t)(s64 >> 0x10);
       pixel[2] += (uint8_t)(s64 >> 0x18);
       sp += 4;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else if ((s64 & 0x03) == 0) {  // QOIR_OP_INDEX
       sp += 1;
-      memcpy(pixel, color_cache[(uint8_t)s64 >> 0x02], 4);
+      memcpy(pixel, color_cache + (uint8_t)s64, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1045,7 +1048,8 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += ((s64 >> 0x04) & 0x03) - 2;
       pixel[2] += ((s64 >> 0x06) & 0x03) - 2;
       sp += 1;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1069,7 +1073,8 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += delta_g - 8 + ((s64 >> 0x0C) & 0x0F);
 #endif
       sp += 2;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1078,7 +1083,8 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += ((s64 >> 0x0A) & 0x7F) - 0x40;
       pixel[2] += ((s64 >> 0x11) & 0x7F) - 0x40;
       sp += 3;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1114,7 +1120,8 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
       pixel[3] += ((s64 >> 0x0E) & 0x03) - 2;
       sp += 2;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1124,7 +1131,8 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
       pixel[3] += ((s64 >> 0x14) & 0x0F) - 8;
       sp += 3;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1134,14 +1142,16 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += (uint8_t)(s64 >> 0x18);
       pixel[3] += (uint8_t)(s64 >> 0x20);
       sp += 5;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else {  // QOIR_OP_A8
       pixel[3] += (uint8_t)(s64 >> 0x08);
       sp += 2;
-      memcpy(color_cache[63 & next_color_index++], pixel, 4);
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
     }
@@ -1497,15 +1507,18 @@ qoir_private_encode_tile_opcodes(           //
   qoir_size_result result = {0};
 
   uint32_t run_length = 0;
-  // The array-of-four-uint8_t elements are in B, G, R, A order.
-  uint8_t color_cache[64][4];
-  for (int i = 0; i < 64; i++) {
-    color_cache[i][0] = 0x00;
-    color_cache[i][1] = 0x00;
-    color_cache[i][2] = 0x00;
-    color_cache[i][3] = 0xFF;
+
+  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
+  // for performance. It is always indexed by a uint8_t value that is a
+  // multiple of four. The four uint8_t elements are in B, G, R, A order.
+  uint8_t color_cache[256];
+  for (int i = 0; i < 256; i += 4) {
+    color_cache[i + 0] = 0x00;
+    color_cache[i + 1] = 0x00;
+    color_cache[i + 2] = 0x00;
+    color_cache[i + 3] = 0xFF;
   }
-  uint32_t next_color_index = 0;
+  uint8_t next_color_index = 0;
   uint8_t color_indexes[1 << QOIR_HASH_TABLE_SIZE] = {0};
 
   uint8_t* dp = dst_ptr;
@@ -1538,14 +1551,14 @@ qoir_private_encode_tile_opcodes(           //
     uint32_t hash = (qoir_private_peek_u32le(sp) * 2654435761u) >>
                     (32 - QOIR_HASH_TABLE_SIZE);
     uint8_t index = color_indexes[hash];
-    if (!memcmp(color_cache[index], sp, 4)) {
-      *dp++ = (uint8_t)(0x00 | (index << 0x02));  // QOIR_OP_INDEX
+    if (!memcmp(color_cache + index, sp, 4)) {
+      *dp++ = (uint8_t)(0x00 | index);  // QOIR_OP_INDEX
       continue;
     }
 
     color_indexes[hash] = next_color_index;
-    memcpy(color_cache[next_color_index], sp, 4);
-    next_color_index = 63 & (next_color_index + 1);
+    memcpy(color_cache + next_color_index, sp, 4);
+    next_color_index += 4;
 
     uint8_t delta[4];
     uint32_t cp8x4;  // Current pixel.
