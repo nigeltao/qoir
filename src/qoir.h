@@ -1013,23 +1013,21 @@ qoir_private_decode_tile_opcodes(  //
       return result;
     }
 
+    uint8_t pixel[4];
+    uint32_t pl8x4;  // Pixel left.
+    uint32_t pa8x4;  // Pixel above.
+    memcpy(&pl8x4, dp - 4, 4);
+    memcpy(&pa8x4, dp - (4 * QOIR_TILE_SIZE), 4);
     // Either code path is equivalent to (but faster than):
     //   pixel[i] = (1 + dp[-4 + i] + dp[(-4 * QOIR_TILE_SIZE) + i]) / 2;
     // for i in 0..4.
-    uint8_t pixel[4];
 #if defined(QOIR_USE_SIMD_SSE2)
-    int pred32l;  // Pixel left.
-    int pred32a;  // Pixel above.
-    memcpy(&pred32l, dp - 4, 4);
-    memcpy(&pred32a, dp - (4 * QOIR_TILE_SIZE), 4);
-    int pred32avg = _mm_cvtsi128_si32(
-        _mm_avg_epu8(_mm_cvtsi32_si128(pred32l), _mm_cvtsi32_si128(pred32a)));
-    memcpy(pixel, &pred32avg, 4);
+    uint32_t pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_avg_epu8(
+        _mm_cvtsi32_si128((int)pl8x4), _mm_cvtsi32_si128((int)pa8x4)));
 #else
-    uint32_t pred32l = qoir_private_peek_u32le(dp - 4);
-    uint32_t pred32a = qoir_private_peek_u32le(dp - (4 * QOIR_TILE_SIZE));
-    qoir_private_poke_u32le(pixel, QOIR_SWAR_PAVGB(pred32l, pred32a));
+    uint32_t pixel8x4 = QOIR_SWAR_PAVGB(pl8x4, pa8x4);
 #endif
+    memcpy(pixel, &pixel8x4, 4);
 
     uint64_t s64 = qoir_private_peek_u64le(sp);
     if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_BGR8
@@ -1545,28 +1543,25 @@ qoir_private_encode_tile_opcodes(           //
 
     memcpy(color_cache[hash], sp, 4);
 
+    uint8_t delta[4];
+    uint32_t cp8x4;  // Current pixel.
+    uint32_t pl8x4;  // Pixel left.
+    uint32_t pa8x4;  // Pixel above.
+    memcpy(&cp8x4, sp, 4);
+    memcpy(&pl8x4, sp - 4, 4);
+    memcpy(&pa8x4, sp - (4 * QOIR_TILE_SIZE), 4);
     // Either code path is equivalent to (but faster than):
     //   delta[i] = sp[i] - ((1 + sp[-4+i] + sp[(-4*QOIR_TILE_SIZE)+i]) / 2);
     // for i in 0..4.
-    uint8_t delta[4];
 #if defined(QOIR_USE_SIMD_SSE2)
-    int curr32;   // Current pixel.
-    int pred32l;  // Pixel left.
-    int pred32a;  // Pixel above.
-    memcpy(&curr32, sp, 4);
-    memcpy(&pred32l, sp - 4, 4);
-    memcpy(&pred32a, sp - (4 * QOIR_TILE_SIZE), 4);
-    int delta32 = _mm_cvtsi128_si32(_mm_sub_epi8(
-        _mm_cvtsi32_si128(curr32),
-        _mm_avg_epu8(_mm_cvtsi32_si128(pred32l), _mm_cvtsi32_si128(pred32a))));
-    memcpy(delta, &delta32, 4);
+    uint32_t delta8x4 = (uint32_t)_mm_cvtsi128_si32(
+        _mm_sub_epi8(_mm_cvtsi32_si128((int)cp8x4),
+                     _mm_avg_epu8(_mm_cvtsi32_si128((int)pl8x4),
+                                  _mm_cvtsi32_si128((int)pa8x4))));
 #else
-    uint32_t curr32 = qoir_private_peek_u32le(sp);
-    uint32_t pred32l = qoir_private_peek_u32le(sp - 4);
-    uint32_t pred32a = qoir_private_peek_u32le(sp - (4 * QOIR_TILE_SIZE));
-    qoir_private_poke_u32le(
-        delta, QOIR_SWAR_PSUBB(curr32, QOIR_SWAR_PAVGB(pred32l, pred32a)));
+    uint32_t delta8x4 = QOIR_SWAR_PSUBB(cp8x4, QOIR_SWAR_PAVGB(pl8x4, pa8x4));
 #endif
+    memcpy(delta, &delta8x4, 4);
 
     if (!has_alpha || (delta[3] == 0)) {
       uint8_t dist02 = dists[delta[0]] | dists[delta[2]];
