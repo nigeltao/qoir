@@ -1,20 +1,20 @@
-Opcode frequency, as of commit 70fa675 "Use Knuth hash for the color cache".
+Opcode frequency, as of commit 358480a `Flatten "uint8_t color_cache[64][4]"`.
 
 Corpus  images.......     lance........
 B/Op    RFreq   WFreq     RFreq   WFreq     Op
-1       0.2433  0.1433    0.3911  0.3033    QOIR_OP_INDEX
-1       0.1426  0.0840    0.1687  0.1308    QOIR_OP_RGB2
-2       0.3906  0.4601    0.0976  0.1513    QOIR_OP_LUMA
-3       0.1047  0.1850    0.0104  0.0243    QOIR_OP_RGB7
-1       0.0833  0.0491    0.2194  0.1702    QOIR_OP_RUNS
-2       0.0056  0.0066    0.0118  0.0183    QOIR_OP_RUNL
-2       0.0004  0.0004    0.0194  0.0302    QOIR_OP_RGBA2
-3       0.0014  0.0025    0.0195  0.0453    QOIR_OP_RGBA4
-5       0.0081  0.0240    0.0120  0.0466    QOIR_OP_RGBA8
-4       0.0183  0.0430    0.0013  0.0041    QOIR_OP_RGB8
-2       0.0017  0.0020    0.0487  0.0756    QOIR_OP_A8
+1       0.2551  0.1551    0.4468  0.3571    QOIR_OP_INDEX
+1       0.1624  0.0988    0.1462  0.1169    QOIR_OP_BGR2
+2       0.3780  0.4597    0.0779  0.1246    QOIR_OP_LUMA
+3       0.0900  0.1641    0.0089  0.0213    QOIR_OP_BGR7
+1       0.0833  0.0506    0.2194  0.1754    QOIR_OP_RUNS
+2       0.0056  0.0069    0.0118  0.0189    QOIR_OP_RUNL
+2       0.0004  0.0005    0.0193  0.0308    QOIR_OP_BGRA2
+3       0.0015  0.0027    0.0168  0.0402    QOIR_OP_BGRA4
+5       0.0092  0.0280    0.0114  0.0457    QOIR_OP_BGRA8
+4       0.0133  0.0324    0.0019  0.0061    QOIR_OP_BGR8
+2       0.0011  0.0014    0.0394  0.0630    QOIR_OP_A8
 Total   1.0     1.0       1.0     1.0
-AvgB/Op     1.6979            1.2894
+AvgB/Op     1.6449            1.2512
 
 The "images" corpus is linked to from
 https://qoiformat.org/benchmark/
