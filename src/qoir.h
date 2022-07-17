@@ -988,7 +988,7 @@ qoir_private_decode_tile_opcodes(  //
     return result;
   }
 
-  // The array-of-four-uint8_t elements are in R, G, B, A order.
+  // The array-of-four-uint8_t elements are in B, G, R, A order.
   uint8_t color_cache[64][4];
   for (int i = 0; i < 64; i++) {
     color_cache[i][0] = 0x00;
@@ -1497,7 +1497,7 @@ qoir_private_encode_tile_opcodes(           //
   qoir_size_result result = {0};
 
   uint32_t run_length = 0;
-  // The array-of-four-uint8_t elements are in R, G, B, A order.
+  // The array-of-four-uint8_t elements are in B, G, R, A order.
   uint8_t color_cache[64][4];
   for (int i = 0; i < 64; i++) {
     color_cache[i][0] = 0x00;
