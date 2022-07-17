@@ -424,7 +424,11 @@ qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
 
 // -------- SWAR (SIMD Within a Register)
 
-// These treat a u32 as a 4xu8 vector.
+// These treat a u32 as a u8x4 vector.
+
+// QOIR_SWAR_PADDB returns (a + b).
+#define QOIR_SWAR_PADDB(a, b) \
+  (((a & 0x7F7F7F7F) + (b & 0x7F7F7F7F)) ^ ((a ^ b) & 0x80808080))
 
 // QOIR_SWAR_PAVGB returns ((a + b + 1) / 2).
 #define QOIR_SWAR_PAVGB(a, b) ((a | b) - (((a ^ b) >> 1) & 0x7F7F7F7F))
@@ -1053,14 +1057,18 @@ qoir_private_decode_tile_opcodes(  //
       dp += 4;
 
     } else if ((s64 & 0x03) == 2) {  // QOIR_OP_LUMA
-#if defined(QOIR_USE_SIMD_SSE2) && !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
-      int delta;
-      memcpy(&delta, qoir_private_table_luma - 2 + (uint16_t)s64, 4);
-      int pixel32;
-      memcpy(&pixel32, pixel, 4);
-      pixel32 = _mm_cvtsi128_si32(
-          _mm_add_epi8(_mm_cvtsi32_si128(pixel32), _mm_cvtsi32_si128(delta)));
-      memcpy(pixel, &pixel32, 4);
+#if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
+      uint32_t delta8x4;
+      memcpy(&delta8x4, qoir_private_table_luma - 2 + (uint16_t)s64, 4);
+      uint32_t pixel8x4;
+      memcpy(&pixel8x4, pixel, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
+          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
+#else
+      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
+#endif
+      memcpy(pixel, &pixel8x4, 4);
 #else
       uint8_t delta_g = ((uint8_t)s64 >> 0x02) - 32;
       pixel[0] += delta_g - 8 + ((s64 >> 0x08) & 0x0F);
@@ -1894,6 +1902,7 @@ qoir_encode(                          //
 #undef QOIR_FREE
 #undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
+#undef QOIR_SWAR_PADDB
 #undef QOIR_SWAR_PAVGB
 #undef QOIR_SWAR_PSUBB
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
