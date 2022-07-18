@@ -727,12 +727,12 @@ fail_invalid_data:
 
 // -------- LZ4 Encode
 
-#define QOIR_LZ4_HASH_TABLE_SIZE 12
+#define QOIR_LZ4_HASH_TABLE_SHIFT 12
 
 static inline uint32_t  //
 qoir_lz4_private_hash(uint32_t x) {
   // 2654435761u is Knuth's magic constant.
-  return (x * 2654435761u) >> (32 - QOIR_LZ4_HASH_TABLE_SIZE);
+  return (x * 2654435761u) >> (32 - QOIR_LZ4_HASH_TABLE_SHIFT);
 }
 
 static inline size_t  //
@@ -796,10 +796,10 @@ qoir_lz4_block_encode(                     //
     const uint8_t* const match_limit = src_ptr + src_len - 5;
     const size_t final_literals_limit = src_len - 11;
 
-    // hash_table maps from QOIR_LZ4_HASH_TABLE_SIZE-bit keys to 32-bit values.
-    // Each value is an offset o, relative to src_ptr, initialized to zero.
-    // Each key, when set, is a hash of 4 bytes src_ptr[o .. o+4].
-    uint32_t hash_table[1 << QOIR_LZ4_HASH_TABLE_SIZE] = {0};
+    // hash_table maps from QOIR_LZ4_HASH_TABLE_SHIFT-bit keys to 32-bit
+    // values. Each value is an offset o, relative to src_ptr, initialized to
+    // zero. Each key, when set, is a hash of 4 bytes src_ptr[o .. o+4].
+    uint32_t hash_table[1 << QOIR_LZ4_HASH_TABLE_SHIFT] = {0};
 
     while (1) {
       // Start with 1-byte steps, accelerating when not finding any matches
@@ -1450,7 +1450,7 @@ fail_invalid_data:
 
 // -------- QOIR Encode
 
-#define QOIR_HASH_TABLE_SIZE 10
+#define QOIR_HASH_TABLE_SHIFT 10
 
 static QOIR_ALWAYS_INLINE qoir_size_result  //
 qoir_private_encode_tile_opcodes(           //
@@ -1519,7 +1519,7 @@ qoir_private_encode_tile_opcodes(           //
     color_cache[i + 3] = 0xFF;
   }
   uint8_t next_color_index = 0;
-  uint8_t color_indexes[1 << QOIR_HASH_TABLE_SIZE] = {0};
+  uint8_t color_indexes[1 << QOIR_HASH_TABLE_SHIFT] = {0};
 
   uint8_t* dp = dst_ptr;
   const uint8_t* sp = src_ptr + QOIR_LITERALS_PRE_PADDING;
@@ -1549,7 +1549,7 @@ qoir_private_encode_tile_opcodes(           //
 
     // 2654435761u is Knuth's magic constant.
     uint32_t hash = (qoir_private_peek_u32le(sp) * 2654435761u) >>
-                    (32 - QOIR_HASH_TABLE_SIZE);
+                    (32 - QOIR_HASH_TABLE_SHIFT);
     uint8_t index = color_indexes[hash];
     if (!memcmp(color_cache + index, sp, 4)) {
       *dp++ = (uint8_t)(0x00 | index);  // QOIR_OP_INDEX
@@ -1912,8 +1912,8 @@ qoir_encode(                          //
 
 #undef QOIR_ALWAYS_INLINE
 #undef QOIR_FREE
-#undef QOIR_HASH_TABLE_SIZE
-#undef QOIR_LZ4_HASH_TABLE_SIZE
+#undef QOIR_HASH_TABLE_SHIFT
+#undef QOIR_LZ4_HASH_TABLE_SHIFT
 #undef QOIR_MALLOC
 #undef QOIR_SWAR_PADDB
 #undef QOIR_SWAR_PAVGB
