@@ -16,28 +16,13 @@
 
 package main
 
-// This program prints the qoir_private_table_lumaN values.
+// This program prints the qoir_private_table_luma values.
 
 import (
 	"fmt"
 )
 
 func main() {
-	for k := uint32(0); k < 256; k += 2 {
-		deltaG := ((k >> 0x01) & 0x07) - 4
-		deltaB := deltaG - 2 + ((k >> 0x04) & 0x03)
-		deltaR := deltaG - 2 + ((k >> 0x06) & 0x03)
-		if (k & 6) == 0 {
-			fmt.Printf("    ")
-		}
-		fmt.Printf("0x%02X,0x%02X,0x%02X,0,", uint8(deltaB), uint8(deltaG), uint8(deltaR))
-		if (k & 6) == 6 {
-			fmt.Println()
-		}
-	}
-
-	fmt.Println()
-
 	for k := uint32(0); k < 65536; k += 4 {
 		deltaG := ((k >> 0x02) & 0x3F) - 32
 		deltaB := deltaG - 8 + ((k >> 0x08) & 0x0F)
