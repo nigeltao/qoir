@@ -401,7 +401,7 @@ qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
 }
 
 #if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
-static uint8_t qoir_private_table_luma[65536];
+static uint8_t qoir_private_table_luma6[65536];
 #endif
 
 static inline uint32_t  //
@@ -988,18 +988,6 @@ qoir_private_decode_tile_opcodes(  //
     return result;
   }
 
-  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
-  // for performance. It is always indexed by a uint8_t value that is a
-  // multiple of four. The four uint8_t elements are in B, G, R, A order.
-  uint8_t color_cache[256];
-  for (int i = 0; i < 256; i += 4) {
-    color_cache[i + 0] = 0x00;
-    color_cache[i + 1] = 0x00;
-    color_cache[i + 2] = 0x00;
-    color_cache[i + 3] = 0xFF;
-  }
-  uint8_t next_color_index = 0;
-
   uint8_t* dp = dst_ptr + QOIR_LITERALS_PRE_PADDING;
   uint8_t* dq = dst_ptr + dst_len;
   const uint8_t* sp = src_ptr;
@@ -1032,31 +1020,22 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += (uint8_t)(s64 >> 0x10);
       pixel[2] += (uint8_t)(s64 >> 0x18);
       sp += 4;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
-    } else if ((s64 & 0x03) == 0) {  // QOIR_OP_INDEX
+    } else if ((s64 & 0x01) == 0) {  // QOIR_OP_LUMA3
+      uint8_t delta_g = ((s64 >> 0x01) & 0x07) - 4;
+      pixel[0] += delta_g - 2 + ((s64 >> 0x04) & 0x03);
+      pixel[1] += delta_g;
+      pixel[2] += delta_g - 2 + ((s64 >> 0x06) & 0x03);
       sp += 1;
-      memcpy(pixel, color_cache + (uint8_t)s64, 4);
       memcpy(dp, pixel, 4);
       dp += 4;
 
-    } else if ((s64 & 0x03) == 1) {  // QOIR_OP_BGR2
-      pixel[0] += ((s64 >> 0x02) & 0x03) - 2;
-      pixel[1] += ((s64 >> 0x04) & 0x03) - 2;
-      pixel[2] += ((s64 >> 0x06) & 0x03) - 2;
-      sp += 1;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0x03) == 2) {  // QOIR_OP_LUMA
+    } else if ((s64 & 0x03) == 1) {  // QOIR_OP_LUMA6
 #if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
       uint32_t delta8x4;
-      memcpy(&delta8x4, qoir_private_table_luma - 2 + (uint16_t)s64, 4);
+      memcpy(&delta8x4, qoir_private_table_luma6 - 1 + (uint16_t)s64, 4);
       uint32_t pixel8x4;
       memcpy(&pixel8x4, pixel, 4);
 #if defined(QOIR_USE_SIMD_SSE2)
@@ -1073,8 +1052,6 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += delta_g - 8 + ((s64 >> 0x0C) & 0x0F);
 #endif
       sp += 2;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1083,8 +1060,6 @@ qoir_private_decode_tile_opcodes(  //
       pixel[1] += ((s64 >> 0x0A) & 0x7F) - 0x40;
       pixel[2] += ((s64 >> 0x11) & 0x7F) - 0x40;
       sp += 3;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1120,8 +1095,6 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
       pixel[3] += ((s64 >> 0x0E) & 0x03) - 2;
       sp += 2;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1131,8 +1104,6 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
       pixel[3] += ((s64 >> 0x14) & 0x0F) - 8;
       sp += 3;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
@@ -1142,16 +1113,12 @@ qoir_private_decode_tile_opcodes(  //
       pixel[2] += (uint8_t)(s64 >> 0x18);
       pixel[3] += (uint8_t)(s64 >> 0x20);
       sp += 5;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
 
     } else {  // QOIR_OP_A8
       pixel[3] += (uint8_t)(s64 >> 0x08);
       sp += 2;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
       memcpy(dp, pixel, 4);
       dp += 4;
     }
@@ -1450,8 +1417,6 @@ fail_invalid_data:
 
 // -------- QOIR Encode
 
-#define QOIR_HASH_TABLE_SIZE 10
-
 static QOIR_ALWAYS_INLINE qoir_size_result  //
 qoir_private_encode_tile_opcodes(           //
     uint8_t* dst_ptr,                       //
@@ -1508,19 +1473,6 @@ qoir_private_encode_tile_opcodes(           //
 
   uint32_t run_length = 0;
 
-  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
-  // for performance. It is always indexed by a uint8_t value that is a
-  // multiple of four. The four uint8_t elements are in B, G, R, A order.
-  uint8_t color_cache[256];
-  for (int i = 0; i < 256; i += 4) {
-    color_cache[i + 0] = 0x00;
-    color_cache[i + 1] = 0x00;
-    color_cache[i + 2] = 0x00;
-    color_cache[i + 3] = 0xFF;
-  }
-  uint8_t next_color_index = 0;
-  uint8_t color_indexes[1 << QOIR_HASH_TABLE_SIZE] = {0};
-
   uint8_t* dp = dst_ptr;
   const uint8_t* sp = src_ptr + QOIR_LITERALS_PRE_PADDING;
   const uint8_t* sq =
@@ -1547,19 +1499,6 @@ qoir_private_encode_tile_opcodes(           //
       }
     }
 
-    // 2654435761u is Knuth's magic constant.
-    uint32_t hash = (qoir_private_peek_u32le(sp) * 2654435761u) >>
-                    (32 - QOIR_HASH_TABLE_SIZE);
-    uint8_t index = color_indexes[hash];
-    if (!memcmp(color_cache + index, sp, 4)) {
-      *dp++ = (uint8_t)(0x00 | index);  // QOIR_OP_INDEX
-      continue;
-    }
-
-    color_indexes[hash] = next_color_index;
-    memcpy(color_cache + next_color_index, sp, 4);
-    next_color_index += 4;
-
     uint8_t delta[4];
     uint32_t cp8x4;  // Current pixel.
     uint32_t pl8x4;  // Pixel left.
@@ -1581,26 +1520,25 @@ qoir_private_encode_tile_opcodes(           //
     memcpy(delta, &delta8x4, 4);
 
     if (!has_alpha || (delta[3] == 0)) {
-      uint8_t dist02 = dists[delta[0]] | dists[delta[2]];
       uint8_t dist1 = dists[delta[1]];
-      uint8_t dist = dist02 | dist1;
 
       uint8_t d0d1 = delta[0] - delta[1];
       uint8_t d2d1 = delta[2] - delta[1];
+      uint8_t dist02 = dists[d0d1] | dists[d2d1];
 
-      if (dist < 0x04) {
-        *dp++ = 0x01 |                      // QOIR_OP_BGR2
-                ((delta[0] + 2) << 0x02) |  //
-                ((delta[1] + 2) << 0x04) |  //
-                ((delta[2] + 2) << 0x06);
+      if ((dist1 < 8) && (dist02 < 4)) {
+        *dp++ = 0x00 |                      // QOIR_OP_LUMA3
+                ((delta[1] + 4) << 0x01) |  //
+                ((d0d1 + 2) << 0x04) |      //
+                ((d2d1 + 2) << 0x06);
 
-      } else if ((dist1 < 0x40) && ((dists[d0d1] | dists[d2d1]) < 0x10)) {
-        *dp++ = 0x02 |                          // QOIR_OP_LUMA
+      } else if ((dist1 < 0x40) && (dist02 < 0x10)) {
+        *dp++ = 0x01 |                          // QOIR_OP_LUMA6
                 (((delta[1] + 0x20)) << 0x02);  //
         *dp++ = (((d0d1 + 0x08)) << 0x00) |     //
                 (((d2d1 + 0x08)) << 0x04);
 
-      } else if (dist < 0x80) {
+      } else if ((dist1 | dists[delta[0]] | dists[delta[2]]) < 0x80) {
         qoir_private_poke_u32le(
             dp,
             0x03 |  // QOIR_OP_BGR7
@@ -1912,7 +1850,6 @@ qoir_encode(                          //
 
 #undef QOIR_ALWAYS_INLINE
 #undef QOIR_FREE
-#undef QOIR_HASH_TABLE_SIZE
 #undef QOIR_LZ4_HASH_TABLE_SIZE
 #undef QOIR_MALLOC
 #undef QOIR_SWAR_PADDB
@@ -1927,7 +1864,7 @@ qoir_encode(                          //
 // The table was generated by script/gen_table_luma.go
 //
 // clang-format off
-static uint8_t qoir_private_table_luma[65536] = {
+static uint8_t qoir_private_table_luma6[65536] = {
     0xD8,0xE0,0xD8,0,0xD9,0xE1,0xD9,0,0xDA,0xE2,0xDA,0,0xDB,0xE3,0xDB,0,
     0xDC,0xE4,0xDC,0,0xDD,0xE5,0xDD,0,0xDE,0xE6,0xDE,0,0xDF,0xE7,0xDF,0,
     0xE0,0xE8,0xE0,0,0xE1,0xE9,0xE1,0,0xE2,0xEA,0xE2,0,0xE3,0xEB,0xE3,0,
