@@ -24,17 +24,17 @@ DecMPixels/s = Decode MegaPixels per second.     Higher is better.
 
 ---
 
-QOIR    0.2520 CmpRatio    151.82 EncMPixels/s    255.91 DecMPixels/s  images/
-QOIR    0.0566 CmpRatio    285.28 EncMPixels/s    433.97 DecMPixels/s  images/icon_512/
-QOIR    0.2955 CmpRatio    162.50 EncMPixels/s    260.62 DecMPixels/s  images/icon_64/
-QOIR    0.5364 CmpRatio    104.26 EncMPixels/s    177.79 DecMPixels/s  images/photo_kodak/
-QOIR    0.5277 CmpRatio    109.08 EncMPixels/s    189.11 DecMPixels/s  images/photo_tecnick/
-QOIR    0.5866 CmpRatio    105.64 EncMPixels/s    187.54 DecMPixels/s  images/photo_wikipedia/
-QOIR    0.1705 CmpRatio    193.56 EncMPixels/s    322.40 DecMPixels/s  images/pngimg/
-QOIR    0.2142 CmpRatio    152.76 EncMPixels/s    246.19 DecMPixels/s  images/screenshot_game/
-QOIR    0.0711 CmpRatio    278.25 EncMPixels/s    469.32 DecMPixels/s  images/screenshot_web/
-QOIR    0.5601 CmpRatio    100.69 EncMPixels/s    183.32 DecMPixels/s  images/textures_photo/
-QOIR    0.6312 CmpRatio    103.98 EncMPixels/s    197.61 DecMPixels/s  images/textures_pk/
-QOIR    0.3341 CmpRatio    108.63 EncMPixels/s    191.51 DecMPixels/s  images/textures_pk01/
-QOIR    0.3987 CmpRatio     90.25 EncMPixels/s    152.88 DecMPixels/s  images/textures_pk02/
-QOIR    0.2041 CmpRatio    204.70 EncMPixels/s    372.09 DecMPixels/s  images/textures_plants/
+QOIR    0.2520 CmpRatio    151.62 EncMPixels/s    263.96 DecMPixels/s  images/
+QOIR    0.0566 CmpRatio    285.87 EncMPixels/s    450.72 DecMPixels/s  images/icon_512/
+QOIR    0.2955 CmpRatio    162.78 EncMPixels/s    263.53 DecMPixels/s  images/icon_64/
+QOIR    0.5364 CmpRatio    104.23 EncMPixels/s    178.86 DecMPixels/s  images/photo_kodak/
+QOIR    0.5277 CmpRatio    108.89 EncMPixels/s    195.48 DecMPixels/s  images/photo_tecnick/
+QOIR    0.5866 CmpRatio    105.28 EncMPixels/s    192.64 DecMPixels/s  images/photo_wikipedia/
+QOIR    0.1705 CmpRatio    193.26 EncMPixels/s    332.68 DecMPixels/s  images/pngimg/
+QOIR    0.2142 CmpRatio    152.60 EncMPixels/s    257.63 DecMPixels/s  images/screenshot_game/
+QOIR    0.0711 CmpRatio    278.42 EncMPixels/s    480.04 DecMPixels/s  images/screenshot_web/
+QOIR    0.5601 CmpRatio    100.44 EncMPixels/s    181.41 DecMPixels/s  images/textures_photo/
+QOIR    0.6312 CmpRatio    103.94 EncMPixels/s    202.28 DecMPixels/s  images/textures_pk/
+QOIR    0.3341 CmpRatio    108.72 EncMPixels/s    194.62 DecMPixels/s  images/textures_pk01/
+QOIR    0.3987 CmpRatio     90.17 EncMPixels/s    154.60 DecMPixels/s  images/textures_pk02/
+QOIR    0.2041 CmpRatio    203.62 EncMPixels/s    374.71 DecMPixels/s  images/textures_plants/
