@@ -1031,7 +1031,12 @@ qoir_private_decode_tile_opcodes(  //
              4);
       uint32_t pixel8x4;
       memcpy(&pixel8x4, pixel, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
+          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
+#else
       pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
+#endif
       memcpy(pixel, &pixel8x4, 4);
 #else
       uint8_t delta_g = ((s64 >> 0x01) & 0x07) - 4;
