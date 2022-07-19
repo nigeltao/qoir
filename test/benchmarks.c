@@ -203,7 +203,7 @@ my_file_callback(void* context,
     return NULL;
   }
 
-  FILE* f = fopen(filename, "r");
+  FILE* f = fopen(filename, "rb");
   if (!f) {
     printf("%s: could not open \"%s\": %s\n", z->benchname, filename,
            strerror(errno));

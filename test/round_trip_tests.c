@@ -51,7 +51,7 @@ my_file_callback(void* context,
     return NULL;
   }
 
-  FILE* f = fopen(filename, "r");
+  FILE* f = fopen(filename, "rb");
   if (!f) {
     printf("%s%s%s: could not open file: %s\n", testname, dirname, filename,
            strerror(errno));

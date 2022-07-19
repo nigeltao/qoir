@@ -134,7 +134,7 @@ test_swizzle(void) {
 
 int  //
 do_test_round_trip(const char* testname, const char* filename) {
-  FILE* f = fopen(filename, "r");
+  FILE* f = fopen(filename, "rb");
   if (!f) {
     printf("%s: %s: %s\n", testname, filename, strerror(errno));
     return 1;
