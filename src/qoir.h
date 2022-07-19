@@ -226,7 +226,7 @@ typedef struct qoir_decode_pixel_configuration_result_struct {
 
 QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
 qoir_decode_pixel_configuration(                          //
-    uint8_t* src_ptr,                                     //
+    const uint8_t* src_ptr,                               //
     size_t src_len);
 
 typedef struct qoir_decode_buffer_struct {
@@ -931,7 +931,7 @@ final_literals:
 
 QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
 qoir_decode_pixel_configuration(                          //
-    uint8_t* src_ptr,                                     //
+    const uint8_t* src_ptr,                               //
     size_t src_len) {
   qoir_decode_pixel_configuration_result result = {0};
 
