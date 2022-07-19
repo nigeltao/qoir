@@ -1044,9 +1044,20 @@ qoir_private_decode_tile_opcodes(  //
       dp += 4;
 
     } else if ((s64 & 0x03) == 1) {  // QOIR_OP_BGR2
-      pixel[0] += ((s64 >> 0x02) & 0x03) - 2;
-      pixel[1] += ((s64 >> 0x04) & 0x03) - 2;
-      pixel[2] += ((s64 >> 0x06) & 0x03) - 2;
+      uint32_t delta8x4 = (uint32_t)(((s64 >> 0x02) & 0x000003) |  //
+                                     ((s64 << 0x04) & 0x000300) |  //
+                                     ((s64 << 0x0A) & 0x030000));
+      delta8x4 = QOIR_SWAR_PSUBB(delta8x4, 0x020202);
+      uint32_t pixel8x4;
+      memcpy(&pixel8x4, pixel, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
+          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
+#else
+      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
+#endif
+      memcpy(pixel, &pixel8x4, 4);
+
       sp += 1;
       memcpy(color_cache + next_color_index, pixel, 4);
       next_color_index += 4;
