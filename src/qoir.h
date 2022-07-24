@@ -969,8 +969,9 @@ qoir_decode_pixel_configuration(                          //
 }
 
 // Callers should pass (QOIR_LITERALS_PRE_PADDING + (4 * tw * th)) for dst_len,
-// so that the decode loop can always refer (by a simple negative offset) to
-// the pixel above the current pixel.
+// so that the decode loop can always refer (by a simple offset of minus
+// QOIR_LITERALS_PRE_PADDING) to the pixel above the current pixel. "Pixel
+// above" is approximate and could refer further back if tw < QOIR_TILE_SIZE.
 //
 // Callers should pass (opcode_stream_length + 8) for src_len so that the
 // decode loop can always peek for 8 bytes, even at the end of the stream.
@@ -1012,7 +1013,7 @@ qoir_private_decode_tile_opcodes(  //
 
     uint8_t pixel[4];
     uint32_t pl8x4;  // Pixel left.
-    uint32_t pa8x4;  // Pixel above.
+    uint32_t pa8x4;  // Pixel above (or further back if tw < QOIR_TILE_SIZE).
     memcpy(&pl8x4, dp - 4, 4);
     memcpy(&pa8x4, dp - (4 * QOIR_TILE_SIZE), 4);
     // Either code path is equivalent to (but faster than):
@@ -1584,7 +1585,7 @@ qoir_private_encode_tile_opcodes(           //
     uint8_t delta[4];
     uint32_t cp8x4;  // Current pixel.
     uint32_t pl8x4;  // Pixel left.
-    uint32_t pa8x4;  // Pixel above.
+    uint32_t pa8x4;  // Pixel above (or further back if tw < QOIR_TILE_SIZE).
     memcpy(&cp8x4, sp, 4);
     memcpy(&pl8x4, sp - 4, 4);
     memcpy(&pa8x4, sp - (4 * QOIR_TILE_SIZE), 4);
