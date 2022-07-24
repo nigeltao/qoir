@@ -148,9 +148,9 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 
 // -------- File Format Constants
 
-#define QOIR_TILE_MASK 0x7F
-#define QOIR_TILE_SIZE 0x80
-#define QOIR_TILE_SHIFT 7
+#define QOIR_TILE_MASK 0x3F
+#define QOIR_TILE_SIZE 0x40
+#define QOIR_TILE_SHIFT 6
 
 // QOIR_LITERALS_PRE_PADDING is large enough to hold one row of a tile's
 // pixels, at 4 bytes per pixel.

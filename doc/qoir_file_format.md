@@ -35,13 +35,13 @@ The PayloadLength must be 0.
 ## QPIX chunk.
 
 The minimum PayloadLength is 0. The payload contains an unpadded sequence of
-encoded tiles. Each tile can be decoded independently, measures 128 x 128
-pixels (although the right and bottom tiles might be smaller) and are presented
-in the natural order (the same as pixels: left-to-right and top-to-bottom).
+encoded tiles. Each tile can be decoded independently, measures 64 x 64 pixels
+(although the right and bottom tiles might be smaller) and are presented in the
+natural order (the same as pixels: left-to-right and top-to-bottom).
 
 A tile's encoding consists of a 4 byte prefix:
 
-- 3 byte EncodedTileLength. Values above 0x10000 = 65536 are invalid unless the
+- 3 byte EncodedTileLength. Values above 0x4000 = 16384 are invalid unless the
   high bit of the EncodedTileFormat is set. None of the currently supported
   EncodedTileFormat values have that high bit set, but future versions might
   use this.
