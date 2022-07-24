@@ -146,7 +146,7 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
   return (pixfmt & 0x10) ? 3 : 4;
 }
 
-// -------- File Format Constants
+// -------- Tiling
 
 #define QOIR_TILE_MASK 0x3F
 #define QOIR_TILE_SIZE 0x40
@@ -158,6 +158,20 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 
 // QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
 #define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
+
+static inline uint32_t  //
+qoir_calculate_number_of_tiles_1d(uint32_t number_of_pixels) {
+  uint64_t rounded_up = (uint64_t)number_of_pixels + QOIR_TILE_MASK;
+  return (uint32_t)(rounded_up >> QOIR_TILE_SHIFT);
+}
+
+static inline uint64_t  //
+qoir_calculate_number_of_tiles_2d(uint32_t width_in_pixels,
+                                  uint32_t height_in_pixels) {
+  uint64_t w = ((uint64_t)width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  uint64_t h = ((uint64_t)height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+  return w * h;
+}
 
 // -------- LZ4 Decode
 
@@ -1199,9 +1213,9 @@ qoir_private_decode_qpix_payload(   //
     const uint8_t* src_ptr,         //
     size_t src_len) {
   size_t height_in_tiles =
-      (dst_height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+      qoir_calculate_number_of_tiles_1d(dst_height_in_pixels);
   size_t width_in_tiles =
-      (dst_width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+      qoir_calculate_number_of_tiles_1d(dst_width_in_pixels);
   if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
     goto done;
   }
@@ -1708,9 +1722,9 @@ qoir_private_encode_qpix_payload(  //
   qoir_size_result result = {0};
 
   size_t height_in_tiles =
-      (src_pixbuf->pixcfg.height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.height_in_pixels);
   size_t width_in_tiles =
-      (src_pixbuf->pixcfg.width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.width_in_pixels);
   if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
     return result;
   }
@@ -1859,9 +1873,9 @@ qoir_encode(                          //
   }
 
   uint64_t width_in_tiles =
-      (src_pixbuf->pixcfg.width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.width_in_pixels);
   uint64_t height_in_tiles =
-      (src_pixbuf->pixcfg.height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.height_in_pixels);
   uint64_t tile_len_worst_case =
       4 + (4 * QOIR_TS2);  // Prefix + literal format.
   uint64_t dst_len_worst_case =
