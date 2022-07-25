@@ -84,7 +84,6 @@ extern const char qoir_lz4_status_message__error_src_is_too_long[];
 extern const char qoir_status_message__error_invalid_argument[];
 extern const char qoir_status_message__error_invalid_data[];
 extern const char qoir_status_message__error_out_of_memory[];
-extern const char qoir_status_message__error_unsupported_pixbuf[];
 extern const char qoir_status_message__error_unsupported_pixbuf_dimensions[];
 extern const char qoir_status_message__error_unsupported_pixfmt[];
 extern const char qoir_status_message__error_unsupported_tile_format[];
@@ -491,8 +490,6 @@ const char qoir_status_message__error_invalid_data[] =  //
     "#qoir: invalid data";
 const char qoir_status_message__error_out_of_memory[] =  //
     "#qoir: out of memory";
-const char qoir_status_message__error_unsupported_pixbuf[] =  //
-    "#qoir: unsupported pixbuf";
 const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
     "#qoir: unsupported pixbuf dimensions";
 const char qoir_status_message__error_unsupported_pixfmt[] =  //
@@ -1853,23 +1850,17 @@ qoir_encode(                          //
     return result;
   }
 
-  uint32_t num_channels = 0;
+  qoir_pixel_format dst_pixfmt = 0;
   switch (src_pixbuf->pixcfg.pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
-      num_channels = 3;
+      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRX;
       break;
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-      num_channels = 4;
+      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_PREMUL;
       break;
     default:
       result.status_message = qoir_status_message__error_unsupported_pixfmt;
       return result;
-  }
-
-  if (src_pixbuf->stride_in_bytes !=
-      ((uint64_t)num_channels * src_pixbuf->pixcfg.width_in_pixels)) {
-    result.status_message = qoir_status_message__error_unsupported_pixbuf;
-    return result;
   }
 
   uint64_t width_in_tiles =
@@ -1901,8 +1892,7 @@ qoir_encode(                          //
   qoir_private_poke_u64le(dst_ptr + 4, 8);
   qoir_private_poke_u32le(dst_ptr + 12, src_pixbuf->pixcfg.width_in_pixels);
   qoir_private_poke_u32le(dst_ptr + 16, src_pixbuf->pixcfg.height_in_pixels);
-  dst_ptr[15] = (num_channels == 3) ? QOIR_PIXEL_FORMAT__BGRX
-                                    : QOIR_PIXEL_FORMAT__BGRA_NONPREMUL;
+  dst_ptr[15] = dst_pixfmt;
 
   // QPIX chunk.
   qoir_private_poke_u32le(dst_ptr + 20, 0x58495051);  // "QPIX"le.
