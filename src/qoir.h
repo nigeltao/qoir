@@ -1275,8 +1275,15 @@ qoir_private_choose_decode_swizzle_func(  //
       return qoir_private_swizzle__bgra__rgba;
 
     case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
-      // TODO: switch (src_pixfmt).
-      return qoir_private_swizzle__bgra__rgba;
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__rgbx;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgrp__rgbn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgra__rgba;
+      }
+      break;
 
     case QOIR_PIXEL_FORMAT__RGB:
       switch (src_pixfmt) {
