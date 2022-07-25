@@ -979,6 +979,28 @@ qoir_decode_pixel_configuration(                          //
   return result;
 }
 
+static qoir_private_swizzle_func          //
+qoir_private_choose_decode_swizzle_func(  //
+    qoir_pixel_format dst_pixfmt,         //
+    qoir_pixel_format src_pixfmt) {
+  switch (dst_pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      return qoir_private_swizzle__copy_4;
+    case QOIR_PIXEL_FORMAT__BGR:
+      return qoir_private_swizzle__bgr__bgra;
+    case QOIR_PIXEL_FORMAT__RGBX:
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      return qoir_private_swizzle__bgra__rgba;
+    case QOIR_PIXEL_FORMAT__RGB:
+      return qoir_private_swizzle__bgr__rgba;
+  }
+
+  return NULL;
+}
+
 // Callers should pass (QOIR_LITERALS_PRE_PADDING + (4 * tw * th)) for dst_len,
 // so that the decode loop can always refer (by a simple offset of minus
 // QOIR_LITERALS_PRE_PADDING) to the pixel above the current pixel. "Pixel
@@ -1219,26 +1241,10 @@ qoir_private_decode_qpix_payload(   //
   size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
   size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
-  qoir_private_swizzle_func swizzle_func = NULL;
-  switch (dst_pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-      swizzle_func = qoir_private_swizzle__copy_4;
-      break;
-    case QOIR_PIXEL_FORMAT__BGR:
-      swizzle_func = qoir_private_swizzle__bgr__bgra;
-      break;
-    case QOIR_PIXEL_FORMAT__RGBX:
-    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
-      swizzle_func = qoir_private_swizzle__bgra__rgba;
-      break;
-    case QOIR_PIXEL_FORMAT__RGB:
-      swizzle_func = qoir_private_swizzle__bgr__rgba;
-      break;
-    default:
-      return qoir_status_message__error_unsupported_pixfmt;
+  qoir_private_swizzle_func swizzle_func =
+      qoir_private_choose_decode_swizzle_func(dst_pixfmt, src_pixfmt);
+  if (!swizzle_func) {
+    return qoir_status_message__error_unsupported_pixfmt;
   }
   size_t num_dst_channels = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
 
