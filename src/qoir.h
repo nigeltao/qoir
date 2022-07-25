@@ -499,6 +499,28 @@ const char qoir_status_message__error_unsupported_tile_format[] =  //
 
 // -------- Pixel Swizzlers
 
+// The DST and SRC in qoir_private_swizzle__DST__SRC means:
+//  - bgr,  rgb  = 3 bytes per pixel, opaque.
+//  - bgra, rgba = 4 bytes per pixel, some sort of alpha.
+//  - bgrn, rgbn = 4 bytes per pixel, nonpremultiplied alpha.
+//  - bgrp, rgbp = 4 bytes per pixel, premultiplied alpha.
+//  - bgrx, rgbx = 4 bytes per pixel, opaque (every 4th byte is ignored).
+//
+// As for bgr versus rgb, letter order matches in-memory byte order,
+// independent of endianness.
+//
+// Unlike PNG, it's always 8 bits per channel, in memory. No more, no less.
+// However, when converting between nonpremultiplied and premultiplied alpha,
+// the computation happens in 16-bit space (and hence the multiplication by one
+// or two factors of 0x101).
+//
+// Working in the higher bit depth can produce slightly different (and arguably
+// slightly more accurate) results. For example, given 8-bit blue and alpha of
+// 0x80 and 0x81:
+//
+//  - ((0x80   * 0x81  ) / 0xFF  )      = 0x40        = 0x40
+//  - ((0x8080 * 0x8181) / 0xFFFF) >> 8 = 0x4101 >> 8 = 0x41
+
 typedef void (*qoir_private_swizzle_func)(  //
     uint8_t* QOIR_RESTRICT dst_ptr,         //
     size_t dst_stride_in_bytes,             //
@@ -524,7 +546,31 @@ qoir_private_swizzle__copy_4(              //
 }
 
 static void                                //
-qoir_private_swizzle__bgr__bgra(           //
+qoir_private_swizzle__bgr__bgrn(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgr__bgrp(           //
     uint8_t* QOIR_RESTRICT dst_ptr,        //
     size_t dst_stride_in_bytes,            //
     const uint8_t* QOIR_RESTRICT src_ptr,  //
@@ -547,7 +593,31 @@ qoir_private_swizzle__bgr__bgra(           //
 }
 
 static void                                //
-qoir_private_swizzle__bgr__rgba(           //
+qoir_private_swizzle__bgr__rgbn(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgr__rgbp(           //
     uint8_t* QOIR_RESTRICT dst_ptr,        //
     size_t dst_stride_in_bytes,            //
     const uint8_t* QOIR_RESTRICT src_ptr,  //
@@ -593,6 +663,30 @@ qoir_private_swizzle__bgra__bgr(           //
 }
 
 static void                                //
+qoir_private_swizzle__bgra__bgrx(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
 qoir_private_swizzle__bgra__rgb(           //
     uint8_t* QOIR_RESTRICT dst_ptr,        //
     size_t dst_stride_in_bytes,            //
@@ -632,6 +726,156 @@ qoir_private_swizzle__bgra__rgba(          //
       *dst_ptr++ = s2;
       *dst_ptr++ = s1;
       *dst_ptr++ = s0;
+      *dst_ptr++ = s3;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__rgbx(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrn__bgrp(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      if (s3 == 0xFF) {
+        *dst_ptr++ = s0;
+        *dst_ptr++ = s1;
+        *dst_ptr++ = s2;
+        *dst_ptr++ = s3;
+      } else if (s3 == 0x00) {
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+      } else {
+        const uint32_t ffff_101 = 0xFFFF * 0x101;
+        uint32_t alpha_101 = (uint32_t)s3 * 0x101;
+        *dst_ptr++ = (uint8_t)(((s0 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s1 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s2 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = s3;
+      }
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrn__rgbp(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      if (s3 == 0xFF) {
+        *dst_ptr++ = s0;
+        *dst_ptr++ = s1;
+        *dst_ptr++ = s2;
+        *dst_ptr++ = s3;
+      } else if (s3 == 0x00) {
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+      } else {
+        const uint32_t ffff_101 = 0xFFFF * 0x101;
+        uint32_t alpha_101 = (uint32_t)s3 * 0x101;
+        *dst_ptr++ = (uint8_t)(((s2 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s1 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s0 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = s3;
+      }
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrp__bgrn(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = s3;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrp__rgbn(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
       *dst_ptr++ = s3;
     }
     dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
@@ -985,17 +1229,65 @@ qoir_private_choose_decode_swizzle_func(  //
     qoir_pixel_format src_pixfmt) {
   switch (dst_pixfmt) {
     case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      // TODO: switch (src_pixfmt).
       return qoir_private_swizzle__copy_4;
+
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+      // TODO: switch (src_pixfmt).
+      return qoir_private_swizzle__copy_4;
+
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__bgrx;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgrp__bgrn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__copy_4;
+      }
+      break;
+
     case QOIR_PIXEL_FORMAT__BGR:
-      return qoir_private_swizzle__bgr__bgra;
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgr__bgrp;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgr__bgrn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgr__bgrp;
+      }
+      break;
+
     case QOIR_PIXEL_FORMAT__RGBX:
-    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      // TODO: switch (src_pixfmt).
       return qoir_private_swizzle__bgra__rgba;
+
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          // TODO: return qoir_private_swizzle__bgra__rgbx;
+          return qoir_private_swizzle__bgra__rgba;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgra__rgba;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          break;
+      }
+      return qoir_private_swizzle__bgra__rgba;
+
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      // TODO: switch (src_pixfmt).
+      return qoir_private_swizzle__bgra__rgba;
+
     case QOIR_PIXEL_FORMAT__RGB:
-      return qoir_private_swizzle__bgr__rgba;
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgr__rgbp;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgr__rgbn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgr__rgbp;
+      }
+      break;
   }
 
   return NULL;
@@ -1858,10 +2150,18 @@ qoir_encode(                          //
 
   qoir_pixel_format dst_pixfmt = 0;
   switch (src_pixbuf->pixcfg.pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGR:
+    case QOIR_PIXEL_FORMAT__RGBX:
     case QOIR_PIXEL_FORMAT__RGB:
       dst_pixfmt = QOIR_PIXEL_FORMAT__BGRX;
       break;
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
     case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_NONPREMUL;
+      break;
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
       dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_PREMUL;
       break;
     default:
