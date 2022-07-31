@@ -38,13 +38,16 @@ SOFTWARE.
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_NO_LINEAR
-#include "stb_image.h"
+#include "../stb/stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include "../stb/stb_image_write.h"
 
 #define QOI_IMPLEMENTATION
 #include "qoi.h"
+
+#define QOIR_IMPLEMENTATION
+#include "../../src/qoir.h"
 
 
 
@@ -338,6 +341,7 @@ typedef struct {
 	benchmark_lib_result_t libpng;
 	benchmark_lib_result_t stbi;
 	benchmark_lib_result_t qoi;
+	benchmark_lib_result_t qoir;
 } benchmark_result_t;
 
 
@@ -353,6 +357,9 @@ void benchmark_print_result(benchmark_result_t res) {
 	res.qoi.encode_time /= res.count;
 	res.qoi.decode_time /= res.count;
 	res.qoi.size /= res.count;
+	res.qoir.encode_time /= res.count;
+	res.qoir.decode_time /= res.count;
+	res.qoir.size /= res.count;
 
 	double px = res.px;
 	printf("        decode ms   encode ms   decode mpps   encode mpps   size kb    rate\n");
@@ -384,6 +391,15 @@ void benchmark_print_result(benchmark_result_t res) {
 		(res.qoi.encode_time > 0 ? px / ((double)res.qoi.encode_time/1000.0) : 0),
 		res.qoi.size/1024,
 		((double)res.qoi.size/(double)res.raw_size) * 100.0
+	);
+	printf(
+		"qoir:    %8.1f    %8.1f      %8.2f      %8.2f  %8ld   %4.1f%%\n", 
+		(double)res.qoir.decode_time/1000000.0,
+		(double)res.qoir.encode_time/1000000.0,
+		(res.qoir.decode_time > 0 ? px / ((double)res.qoir.decode_time/1000.0) : 0),
+		(res.qoir.encode_time > 0 ? px / ((double)res.qoir.encode_time/1000.0) : 0),
+		res.qoir.size/1024,
+		((double)res.qoir.size/(double)res.raw_size) * 100.0
 	);
 	printf("\n");
 }
@@ -429,8 +445,23 @@ benchmark_result_t benchmark_image(const char *path) {
 			.channels = channels,
 			.colorspace = QOI_SRGB
 		}, &encoded_qoi_size);
+	qoir_encode_result encoded_qoir = (qoir_encode_result){};
+	{
+		qoir_pixel_buffer src_pixbuf;
+		src_pixbuf.pixcfg.pixfmt = (channels == 3)
+				? QOIR_PIXEL_FORMAT__RGB
+				: QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
+		src_pixbuf.pixcfg.width_in_pixels = w;
+		src_pixbuf.pixcfg.height_in_pixels = h;
+		src_pixbuf.data = (uint8_t*)pixels;
+		src_pixbuf.stride_in_bytes = (size_t)channels * (size_t)w;
+		encoded_qoir = qoir_encode(&src_pixbuf, NULL);
+		if (encoded_qoir.status_message) {
+			ERROR("Error QOIR-encoding %s: %s", path, encoded_qoir.status_message);
+		}
+	}
 
-	if (!pixels || !encoded_qoi || !encoded_png) {
+	if (!pixels || !encoded_qoi || !encoded_png || !encoded_qoir.dst_ptr) {
 		ERROR("Error decoding %s", path);
 	}
 
@@ -477,6 +508,13 @@ benchmark_result_t benchmark_image(const char *path) {
 			void *dec_p = qoi_decode(encoded_qoi, encoded_qoi_size, &desc, 4);
 			free(dec_p);
 		});
+
+		BENCHMARK_FN(opt_nowarmup, opt_runs, res.qoir.decode_time, {
+			qoir_decode_options opts = (qoir_decode_options){};
+			opts.pixfmt = QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
+			qoir_decode_result d = qoir_decode(encoded_qoir.dst_ptr, encoded_qoir.dst_len, &opts);
+			free(d.owned_memory);
+		});
 	}
 
 
@@ -508,11 +546,26 @@ benchmark_result_t benchmark_image(const char *path) {
 			res.qoi.size = enc_size;
 			free(enc_p);
 		});
+
+		BENCHMARK_FN(opt_nowarmup, opt_runs, res.qoir.encode_time, {
+			qoir_pixel_buffer src_pixbuf;
+			src_pixbuf.pixcfg.pixfmt = (channels == 3)
+					? QOIR_PIXEL_FORMAT__RGB
+					: QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
+			src_pixbuf.pixcfg.width_in_pixels = w;
+			src_pixbuf.pixcfg.height_in_pixels = h;
+			src_pixbuf.data = (uint8_t*)pixels;
+			src_pixbuf.stride_in_bytes = (size_t)channels * (size_t)w;
+			qoir_encode_result e = qoir_encode(&src_pixbuf, NULL);
+			res.qoir.size = e.dst_len;
+			free(e.owned_memory);
+		});
 	}
 
 	free(pixels);
 	free(encoded_png);
 	free(encoded_qoi);
+	free(encoded_qoir.owned_memory);
 
 	return res;
 }
@@ -577,6 +630,9 @@ void benchmark_directory(const char *path, benchmark_result_t *grand_total) {
 		dir_total.qoi.encode_time += res.qoi.encode_time;
 		dir_total.qoi.decode_time += res.qoi.decode_time;
 		dir_total.qoi.size += res.qoi.size;
+		dir_total.qoir.encode_time += res.qoir.encode_time;
+		dir_total.qoir.decode_time += res.qoir.decode_time;
+		dir_total.qoir.size += res.qoir.size;
 
 		grand_total->count++;
 		grand_total->raw_size += res.raw_size;
@@ -590,6 +646,9 @@ void benchmark_directory(const char *path, benchmark_result_t *grand_total) {
 		grand_total->qoi.encode_time += res.qoi.encode_time;
 		grand_total->qoi.decode_time += res.qoi.decode_time;
 		grand_total->qoi.size += res.qoi.size;
+		grand_total->qoir.encode_time += res.qoir.encode_time;
+		grand_total->qoir.decode_time += res.qoir.decode_time;
+		grand_total->qoir.size += res.qoir.size;
 	}
 	closedir(dir);
 

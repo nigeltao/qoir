@@ -4,4 +4,4 @@ License: MIT
 CommitHash: edb8d7b1140be3168cc99ed87edc605c7c1cf31f
 CommitDate: 2022-06-21 08:54:17 +0200
 LocalModifications:
-None.
+- PENDING Add QOIR to third_party/qoi/qoibench.c
