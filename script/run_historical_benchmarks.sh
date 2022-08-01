@@ -15,6 +15,12 @@
 
 # ----------------
 
+if [[ ! -d images && ! -h images ]]; then
+    echo 'The images directory/symlink does not exist. Unpack it from the tar file at'
+    echo 'https://qoiformat.org/benchmark/'
+    exit 1
+fi
+
 save=$(git branch --show-current)
 if [ -z "$save" ]; then
     save=$(git log -1 --pretty=format:"%H")
@@ -30,11 +36,11 @@ while [ $i -lt 9999 ]; do
   if [ $this_hash = 2feeb80 ]; then
     break
   fi
-  this_gcc=$(CC=gcc   ./run_benchmarks.sh | grep QOIR | head -n 1 | \
-      sed -e 's,QOIR   ,,' -e 's,CmpRatio  ,CR,' \
+  this_gcc=$(CC=gcc   ./run_benchmarks.sh images | grep QOI | head -n 1 | \
+      sed -e 's,QOI.   ,,' -e 's,CmpRatio  ,CR,' \
       -e 's,EncMPixels/s  ,gccEnc,' -e 's,DecMPixels/s.*,gccDec,')
-  this_cla=$(CC=clang ./run_benchmarks.sh | grep QOIR | head -n 1 | \
-      sed -e 's,QOIR   ,,' -e 's,.*CmpRatio   ,,' \
+  this_cla=$(CC=clang ./run_benchmarks.sh images | grep QOI | head -n 1 | \
+      sed -e 's,QOI.   ,,' -e 's,.*CmpRatio   ,,' \
       -e 's,EncMPixels/s  ,claEnc,' -e 's,DecMPixels/s.*,claDec,')
   echo "$this_hash $this_gcc $this_cla  $this_subj"
   git checkout --quiet HEAD^
