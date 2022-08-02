@@ -27,6 +27,8 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
+PENDING  0.2483 CR  167.00 gccEnc  270.21 gccDec  142.28 claEnc  161.79 claDec  Optimize encode QOIR_OP_LUMA if-condition
+60f2da5  0.2483 CR  153.68 gccEnc  267.32 gccDec  142.44 claEnc  161.71 claDec  Have historical benchmarks use images corpus
 8079d1b  0.2483 CR  152.23 gccEnc  265.76 gccDec  141.33 claEnc  161.24 claDec  Update PENDING in third_party/qoi/*
 3ffdb69  0.2483 CR  152.35 gccEnc  266.08 gccDec  141.49 claEnc  161.34 claDec  Add QOIR to third_party/qoi/qoibench.c
 ad51e95  0.2483 CR  152.17 gccEnc  265.90 gccDec  140.98 claEnc  161.18 claDec  Add third_party/qoi/qoibench.c

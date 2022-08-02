@@ -1952,7 +1952,7 @@ qoir_private_encode_tile_opcodes(           //
                 ((delta[1] + 2) << 0x04) |  //
                 ((delta[2] + 2) << 0x06);
 
-      } else if ((dist1 < 0x40) && ((dists[d0d1] | dists[d2d1]) < 0x10)) {
+      } else if (!((dist1 >> 6) | (dists[d0d1] >> 4) | (dists[d2d1] >> 4))) {
         *dp++ = 0x02 |                          // QOIR_OP_LUMA
                 (((delta[1] + 0x20)) << 0x02);  //
         *dp++ = (((d0d1 + 0x08)) << 0x00) |     //
