@@ -1,21 +1,21 @@
-Opcode frequency, as of commit 67dabb9 `Shrink QOIR_TILE_SIZE from 128 to 64
-pixels`.
+Opcode frequency, as of commit PENDING `Change predictor from ((left+above)/2)
+to (left)`.
 
 Corpus  images.......     lance........
 B/Op    RFreq   WFreq     RFreq   WFreq     Op
-1       0.3014  0.1844    0.5179  0.4200    QOIR_OP_INDEX
-1       0.1308  0.0800    0.0948  0.0769    QOIR_OP_BGR2
-2       0.3597  0.4402    0.0706  0.1145    QOIR_OP_LUMA
-3       0.0902  0.1656    0.0096  0.0235    QOIR_OP_BGR7
-1       0.0846  0.0518    0.2211  0.1793    QOIR_OP_RUNS
-2       0.0054  0.0067    0.0111  0.0181    QOIR_OP_RUNL
-2       0.0004  0.0004    0.0162  0.0262    QOIR_OP_BGRA2
-3       0.0014  0.0025    0.0155  0.0376    QOIR_OP_BGRA4
-5       0.0089  0.0271    0.0119  0.0481    QOIR_OP_BGRA8
-4       0.0164  0.0401    0.0031  0.0100    QOIR_OP_BGR8
-2       0.0009  0.0011    0.0282  0.0458    QOIR_OP_A8
+1       0.3014  0.1812    0.5179  0.4174    QOIR_OP_INDEX
+1       0.1135  0.0682    0.0829  0.0668    QOIR_OP_BGR2
+2       0.3644  0.4381    0.0800  0.1290    QOIR_OP_LUMA
+3       0.1020  0.1840    0.0091  0.0220    QOIR_OP_BGR7
+1       0.0846  0.0509    0.2211  0.1782    QOIR_OP_RUNS
+2       0.0054  0.0065    0.0111  0.0180    QOIR_OP_RUNL
+2       0.0003  0.0004    0.0146  0.0235    QOIR_OP_BGRA2
+3       0.0013  0.0023    0.0172  0.0416    QOIR_OP_BGRA4
+5       0.0078  0.0234    0.0114  0.0458    QOIR_OP_BGRA8
+4       0.0182  0.0437    0.0012  0.0039    QOIR_OP_BGR8
+2       0.0011  0.0013    0.0334  0.0538    QOIR_OP_A8
 Total   1.0     1.0       1.0     1.0
-AvgB/Op     1.6341            1.2331
+AvgB/Op     1.6635            1.2409
 
 The "images" corpus is linked to from
 https://qoiformat.org/benchmark/
