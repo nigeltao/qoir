@@ -29,7 +29,7 @@ fi
 echo "Commit   CmpRatio   -------------gcc------------  ------------clang-----------"
 
 i=0
-while [ $i -lt 9999 ]; do
+while [ $i -lt ${N:-9999} ]; do
   set +e
   this_hash=$(git log -1 --pretty=format:"%h")
   this_subj=$(git log -1 --pretty=format:"%s")
