@@ -1,4 +1,4 @@
-Opcode frequency, as of commit PENDING `Change predictor from ((left+above)/2)
+Opcode frequency, as of commit 01e68f4 `Change predictor from ((left+above)/2)
 to (left)`.
 
 Corpus  images.......     lance........

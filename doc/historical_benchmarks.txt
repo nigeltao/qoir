@@ -27,7 +27,9 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  167.98 gccEnc  275.69 gccDec  146.77 claEnc  171.14 claDec  Change predictor from ((left+above)/2) to (left)
+PENDING  0.2526 CR  161.09 gccEnc  272.20 gccDec  142.93 claEnc  171.30 claDec  Shrink QOIR_LITERALS_PRE_PADDING from 4*TS to 4
+c63e135  0.2526 CR  168.47 gccEnc  275.85 gccDec  146.97 claEnc  171.48 claDec  Add N parameter to run_historical_benchmarks
+01e68f4  0.2526 CR  167.98 gccEnc  275.69 gccDec  146.77 claEnc  171.14 claDec  Change predictor from ((left+above)/2) to (left)
 38243fc  0.2483 CR  166.45 gccEnc  270.20 gccDec  142.69 claEnc  161.21 claDec  Add cmd/qoirview.c
 e03192a  0.2483 CR  167.00 gccEnc  270.21 gccDec  142.28 claEnc  161.79 claDec  Optimize encode QOIR_OP_LUMA if-condition
 60f2da5  0.2483 CR  153.68 gccEnc  267.32 gccDec  142.44 claEnc  161.71 claDec  Have historical benchmarks use images corpus

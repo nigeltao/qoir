@@ -151,9 +151,9 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
 #define QOIR_TILE_SIZE 0x40
 #define QOIR_TILE_SHIFT 6
 
-// QOIR_LITERALS_PRE_PADDING is large enough to hold one row of a tile's
-// pixels, at 4 bytes per pixel.
-#define QOIR_LITERALS_PRE_PADDING (4 * QOIR_TILE_SIZE)
+// QOIR_LITERALS_PRE_PADDING is large enough to hold the previous pixel, at 4
+// bytes per pixel.
+#define QOIR_LITERALS_PRE_PADDING 4
 
 // QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
 #define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
@@ -436,9 +436,6 @@ qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
 // QOIR_SWAR_PADDB returns (a + b).
 #define QOIR_SWAR_PADDB(a, b) \
   (((a & 0x7F7F7F7F) + (b & 0x7F7F7F7F)) ^ ((a ^ b) & 0x80808080))
-
-// QOIR_SWAR_PAVGB returns ((a + b + 1) / 2).
-#define QOIR_SWAR_PAVGB(a, b) ((a | b) - (((a ^ b) >> 1) & 0x7F7F7F7F))
 
 // QOIR_SWAR_PSUBB returns (a - b).
 #define QOIR_SWAR_PSUBB(a, b) \
@@ -1321,7 +1318,8 @@ qoir_private_choose_decode_swizzle_func(  //
 }
 
 // Callers should pass (QOIR_LITERALS_PRE_PADDING + (4 * tw * th)) for dst_len,
-// for historical reasons.
+// so that the decode loop can always refer (by a simple offset of -4) to the
+// pixel left of the current pixel.
 //
 // Callers should pass (opcode_stream_length + 8) for src_len so that the
 // decode loop can always peek for 8 bytes, even at the end of the stream.
@@ -2254,7 +2252,6 @@ qoir_encode(                          //
 #undef QOIR_LZ4_HASH_TABLE_SHIFT
 #undef QOIR_MALLOC
 #undef QOIR_SWAR_PADDB
-#undef QOIR_SWAR_PAVGB
 #undef QOIR_SWAR_PSUBB
 #undef QOIR_USE_MEMCPY_LE_PEEK_POKE
 #undef QOIR_USE_SIMD_SSE2
