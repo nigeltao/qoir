@@ -20,10 +20,11 @@ The minimum PayloadLength is 8. The PayloadLength also serves as a file format
 version number, as future versions may use a larger value. The payload is:
 
 - 3 byte width in pixels.
-- ½ byte pixel format (as per the `qoir_pixel_format` C type).
-- ½ byte reserved.
+- ½ byte (low  4 bits) pixel format (as per the `qoir_pixel_format` C type).
+- ½ byte (high 4 bits) reserved.
 - 3 byte height in pixels.
-- 1 byte reserved.
+- ⅜ byte (low  3 bits) lossiness.
+- ⅝ byte (high 5 bits) reserved.
 - The remainder is ignored, for forward compatibility.
 
 

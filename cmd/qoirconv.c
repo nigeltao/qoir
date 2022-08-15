@@ -31,7 +31,9 @@
 // ----
 
 load_file_result  //
-convert_from_png_to_qoir(const uint8_t* src_ptr, size_t src_len) {
+convert_from_png_to_qoir(const uint8_t* src_ptr,
+                         size_t src_len,
+                         const qoir_encode_options* enc_opts) {
   load_file_result result = {0};
 
   int width = 0;
@@ -62,7 +64,7 @@ convert_from_png_to_qoir(const uint8_t* src_ptr, size_t src_len) {
   pixbuf.pixcfg.height_in_pixels = height;
   pixbuf.data = (uint8_t*)pixbuf_data;
   pixbuf.stride_in_bytes = (size_t)channels * (size_t)width;
-  qoir_encode_result enc = qoir_encode(&pixbuf, NULL);
+  qoir_encode_result enc = qoir_encode(&pixbuf, enc_opts);
   stbi_image_free(pixbuf_data);
   if (enc.status_message) {
     free(enc.owned_memory);
@@ -133,19 +135,49 @@ convert_from_qoir_to_png(const uint8_t* src_ptr, size_t src_len) {
 // ----
 
 int  //
+usage() {
+  fprintf(stderr,
+          "Usage:\n"                                     //
+          "  qoirconv --lossiness=L foo.png foo.qoir\n"  //
+          "  qoirconv foo.qoir foo.png\n"                //
+          "  L ranges in 0 ..= 7; the default (0) means lossless\n");
+  return 1;
+}
+
+int  //
 main(int argc, char** argv) {
-  if (argc >= 4) {
-    fprintf(
-        stderr,
-        "Usage:\n  qoirconv foo.png foo.qoir\n  qoirconv foo.qoir foo.png\n");
-    return 1;
+  const char* arg_src = NULL;
+  const char* arg_dst = NULL;
+  qoir_encode_options encopts = {0};
+
+  for (int i = 1; i < argc; i++) {
+    const char* arg = argv[i];
+    if (arg[0] != '-') {
+      if (!arg_src) {
+        arg_src = arg;
+        continue;
+      } else if (!arg_dst) {
+        arg_dst = arg;
+        continue;
+      }
+      return usage();
+    }
+    arg++;
+    if (!strncmp(arg, "-lossiness=", 11)) {
+      long int x = strtol(arg + 11, NULL, 10);
+      if ((0 <= x) && (x < 8)) {
+        encopts.lossiness = x;
+        continue;
+      }
+    }
+    return usage();
   }
 
   FILE* fin = stdin;
-  if (argc >= 2) {
-    fin = fopen(argv[1], "rb");
+  if (arg_src) {
+    fin = fopen(arg_src, "rb");
     if (!fin) {
-      fprintf(stderr, "qoirconv: could not open %s: %s\n", argv[1],
+      fprintf(stderr, "qoirconv: could not open %s: %s\n", arg_src,
               strerror(errno));
       return 1;
     }
@@ -153,8 +185,8 @@ main(int argc, char** argv) {
 
   load_file_result r0 = load_file(fin, UINT64_MAX);
   if (r0.status_message) {
-    fprintf(stderr, "qoirconv: could not load %s: %s\n", argv[1],
-            r0.status_message);
+    fprintf(stderr, "qoirconv: could not load %s: %s\n",
+            arg_src ? arg_src : "<stdin>", r0.status_message);
     return 1;
   }
 
@@ -170,28 +202,28 @@ main(int argc, char** argv) {
         r1 = convert_from_qoir_to_png(r0.dst_ptr, r0.dst_len);
         break;
       case 0x89:
-        r1 = convert_from_png_to_qoir(r0.dst_ptr, r0.dst_len);
+        r1 = convert_from_png_to_qoir(r0.dst_ptr, r0.dst_len, &encopts);
         break;
     }
   }
   if (r1.status_message) {
-    fprintf(stderr, "qoirconv: could not convert %s: %s\n", argv[1],
-            r1.status_message);
+    fprintf(stderr, "qoirconv: could not convert %s: %s\n",
+            arg_src ? arg_src : "<stdin>", r1.status_message);
     return 1;
   }
 
   FILE* fout = stdout;
-  if (argc >= 3) {
-    fout = fopen(argv[2], "wb");
+  if (arg_dst) {
+    fout = fopen(arg_dst, "wb");
     if (!fout) {
-      fprintf(stderr, "qoirconv: could not open %s: %s\n", argv[2],
+      fprintf(stderr, "qoirconv: could not open %s: %s\n", arg_dst,
               strerror(errno));
       return 1;
     }
   }
   if (r1.dst_len != fwrite(r1.dst_ptr, 1, r1.dst_len, fout)) {
-    fprintf(stderr, "qoirconv: could not save %s: %s\n", argv[2],
-            strerror(errno));
+    fprintf(stderr, "qoirconv: could not save %s: %s\n",
+            arg_dst ? arg_dst : "<stdout>", strerror(errno));
     return 1;
   }
 
