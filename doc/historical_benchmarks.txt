@@ -27,7 +27,8 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  160.20 gccEnc  271.23 gccDec  141.72 claEnc  165.33 claDec  Roll back "Have encode dists table depend on etc"
+PENDING  0.2526 CR  161.35 gccEnc  272.06 gccDec  146.01 claEnc  165.55 claDec  Remove masks from qoir_private_encode_tile_opcodes
+82c06b2  0.2526 CR  160.20 gccEnc  271.23 gccDec  141.72 claEnc  165.33 claDec  Roll back "Have encode dists table depend on etc"
 4886e8b  0.2526 CR  158.13 gccEnc  258.97 gccDec  140.25 claEnc  167.77 claDec  Have encode dists table depend on lossiness
 5aeb865  0.2526 CR  160.20 gccEnc  271.23 gccDec  141.72 claEnc  165.33 claDec  Add lossiness encoding option
 53cdf23  0.2526 CR  160.78 gccEnc  271.37 gccDec  142.46 claEnc  171.54 claDec  Add masks to qoir_private_encode_tile_opcodes

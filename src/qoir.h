@@ -1956,24 +1956,24 @@ qoir_private_encode_tile_opcodes(           //
       uint8_t d2d1 = delta[2] - delta[1];
 
       if (dist < 0x04) {
-        *dp++ = 0x01 |                                  // QOIR_OP_BGR2
-                (((delta[0] + 0x02) & 0x03) << 0x02) |  //
-                (((delta[1] + 0x02) & 0x03) << 0x04) |  //
-                (((delta[2] + 0x02) & 0x03) << 0x06);
+        *dp++ = 0x01 |                         // QOIR_OP_BGR2
+                ((delta[0] + 0x02) << 0x02) |  //
+                ((delta[1] + 0x02) << 0x04) |  //
+                ((delta[2] + 0x02) << 0x06);
 
       } else if (!((dist1 >> 6) | (dists[d0d1] >> 4) | (dists[d2d1] >> 4))) {
-        *dp++ = 0x02 |                              // QOIR_OP_LUMA
-                ((delta[1] + 0x20) << 0x02);        //
-        *dp++ = (((d0d1 + 0x08) & 0x0F) << 0x00) |  //
-                (((d2d1 + 0x08) & 0x0F) << 0x04);
+        *dp++ = 0x02 |                        // QOIR_OP_LUMA
+                ((delta[1] + 0x20) << 0x02);  //
+        *dp++ = ((d0d1 + 0x08) << 0x00) |     //
+                ((d2d1 + 0x08) << 0x04);
 
       } else if (dist < 0x80) {
         qoir_private_poke_u32le(
             dp,
             0x03 |  // QOIR_OP_BGR7
-                ((uint32_t)(uint8_t)((delta[0] + 0x40) & 0x7F) << 0x03) |
-                ((uint32_t)(uint8_t)((delta[1] + 0x40) & 0x7F) << 0x0A) |
-                ((uint32_t)(uint8_t)((delta[2] + 0x40) & 0x7F) << 0x11));
+                ((uint32_t)(uint8_t)(delta[0] + 0x40) << 0x03) |
+                ((uint32_t)(uint8_t)(delta[1] + 0x40) << 0x0A) |
+                ((uint32_t)(uint8_t)(delta[2] + 0x40) << 0x11));
         dp += 3;
 
       } else {
@@ -1991,17 +1991,17 @@ qoir_private_encode_tile_opcodes(           //
       uint8_t dist =
           dists[delta[0]] | dists[delta[1]] | dists[delta[2]] | dists[delta[3]];
       if (dist < 0x04) {
-        *dp++ = 0xDF;                                   // QOIR_OP_BGRA2
-        *dp++ = (((delta[0] + 0x02) & 0x03) << 0x00) |  //
-                (((delta[1] + 0x02) & 0x03) << 0x02) |  //
-                (((delta[2] + 0x02) & 0x03) << 0x04) |  //
-                (((delta[3] + 0x02) & 0x03) << 0x06);
+        *dp++ = 0xDF;                          // QOIR_OP_BGRA2
+        *dp++ = ((delta[0] + 0x02) << 0x00) |  //
+                ((delta[1] + 0x02) << 0x02) |  //
+                ((delta[2] + 0x02) << 0x04) |  //
+                ((delta[3] + 0x02) << 0x06);
       } else if (dist < 0x10) {
-        *dp++ = 0xE7;                                   // QOIR_OP_BGRA4
-        *dp++ = (((delta[0] + 0x08) & 0x0F) << 0x00) |  //
-                (((delta[1] + 0x08) & 0x0F) << 0x04);   //
-        *dp++ = (((delta[2] + 0x08) & 0x0F) << 0x00) |  //
-                (((delta[3] + 0x08) & 0x0F) << 0x04);
+        *dp++ = 0xE7;                          // QOIR_OP_BGRA4
+        *dp++ = ((delta[0] + 0x08) << 0x00) |  //
+                ((delta[1] + 0x08) << 0x04);   //
+        *dp++ = ((delta[2] + 0x08) << 0x00) |  //
+                ((delta[3] + 0x08) << 0x04);
       } else {
         *dp++ = 0xEF;  // QOIR_OP_BGRA8
         *dp++ = delta[0];
