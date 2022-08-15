@@ -16,7 +16,7 @@
 
 package main
 
-// This program prints the qoir_private_table_dists values.
+// This program prints the qoir_private_encode_tile_opcodes dists values.
 
 import (
 	"fmt"
@@ -24,35 +24,18 @@ import (
 
 func main() {
 	table := [256]int{}
-	for lossiness := 0; lossiness < 8; lossiness++ {
-		if lossiness == 0 {
-			for n := 8; n >= 0; n-- {
-				width := 1 << n
-				start := -(width / 2)
-				for i := 0; i < width; i++ {
-					table[uint8(start+i)] = width / 2
-				}
-			}
+	for n := 8; n >= 0; n-- {
+		width := 1 << n
+		start := -(width / 2)
+		for i := 0; i < width; i++ {
+			table[uint8(start+i)] = width / 2
+		}
+	}
+	for k, v := range table {
+		if (k & 7) == 7 {
+			fmt.Printf("0x%02X,  //\n", v)
 		} else {
-			max := 1 << (8 - lossiness)
-			for k, v := range table {
-				if v == max {
-					table[k] = table[0xFF&(k+max)]
-				}
-			}
-		}
-
-		for k, v := range table {
-			if (k & 15) == 0 {
-				fmt.Printf("  0x%02X,", v)
-			} else if (k & 15) == 15 {
-				fmt.Printf("0x%02X,\n", v)
-			} else {
-				fmt.Printf("0x%02X,", v)
-			}
-		}
-		if lossiness != 7 {
-			fmt.Printf("}, {\n")
+			fmt.Printf("0x%02X, ", v)
 		}
 	}
 }
