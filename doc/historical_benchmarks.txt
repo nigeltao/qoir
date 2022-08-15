@@ -27,7 +27,8 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  160.20 gccEnc  271.23 gccDec  141.72 claEnc  165.33 claDec  Add lossiness encoding option
+PENDING  0.2526 CR  158.13 gccEnc  258.97 gccDec  140.25 claEnc  167.77 claDec  Have encode dists table depend on lossiness
+5aeb865  0.2526 CR  160.20 gccEnc  271.23 gccDec  141.72 claEnc  165.33 claDec  Add lossiness encoding option
 53cdf23  0.2526 CR  160.78 gccEnc  271.37 gccDec  142.46 claEnc  171.54 claDec  Add masks to qoir_private_encode_tile_opcodes
 f3c3ebf  0.2526 CR  161.09 gccEnc  272.20 gccDec  142.93 claEnc  171.30 claDec  Shrink QOIR_LITERALS_PRE_PADDING from 4*TS to 4
 c63e135  0.2526 CR  168.47 gccEnc  275.85 gccDec  146.97 claEnc  171.48 claDec  Add N parameter to run_historical_benchmarks
