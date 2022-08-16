@@ -46,6 +46,20 @@ extern "C" {
 
 // -------- Compile-time Configuration
 
+// The compile-time configuration macros are:
+//  - QOIR_CONFIG__DISABLE_LOOK_UP_TABLES
+//  - QOIR_CONFIG__DISABLE_SIMD
+//  - QOIR_CONFIG__STATIC_FUNCTIONS
+//  - QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
+
+// ----
+
+// If using e.g. "CFLAGS='-DQOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY -O3'") then
+// you probably also want "LDFLAGS=-llz4", otherwise you'll get "undefined
+// reference to `LZ4_decompress_safe'".
+
+// ----
+
 // Define QOIR_CONFIG__STATIC_FUNCTIONS (combined with QOIR_IMPLEMENTATION) to
 // make all of QOIR's functions have static storage.
 //
@@ -320,6 +334,11 @@ qoir_encode(                              //
 #ifdef QOIR_IMPLEMENTATION
 
 // ================================ +Private Implementation
+
+#if defined(QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY)
+#include <limits.h>
+#include <lz4.h>
+#endif
 
 // This implementation assumes that:
 //  - converting a uint32_t to a size_t will never overflow.
@@ -899,6 +918,18 @@ qoir_lz4_block_decode(                     //
     return result;
   }
 
+#if defined(QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY)
+  int n =
+      LZ4_decompress_safe((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
+                          ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
+  if (n < 0) {
+    result.status_message = qoir_lz4_status_message__error_invalid_data;
+    return result;
+  }
+  result.value = n;
+  return result;
+
+#else
   uint8_t* const original_dst_ptr = dst_ptr;
 
   // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for file
@@ -979,6 +1010,7 @@ qoir_lz4_block_decode(                     //
 fail_invalid_data:
   result.status_message = qoir_lz4_status_message__error_invalid_data;
   return result;
+#endif  // QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
 }
 
 // -------- LZ4 Encode
@@ -1031,6 +1063,9 @@ qoir_lz4_block_encode(                     //
     size_t dst_len,                        //
     const uint8_t* QOIR_RESTRICT src_ptr,  //
     size_t src_len) {
+  // This function does not switch on QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY.
+  // We'd like the encoder's output to be the same regardless of configuration.
+
   qoir_size_result result = qoir_lz4_block_encode_worst_case_dst_len(src_len);
   if (result.status_message) {
     return result;
