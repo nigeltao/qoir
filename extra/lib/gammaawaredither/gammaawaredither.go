@@ -21,6 +21,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 )
 
 // These errors can be returned by Dither.
@@ -102,10 +103,9 @@ func dither(lossiness uint32, pixel uint8, noise float64, gamma float64) uint8 {
 	}
 
 	// Compare the pixel's position in that bracket to the noise.
-	// TODO: use gamma.
-	p := float64(pixel) / 255.0
-	l := float64(lower) / 255.0
-	u := float64(upper) / 255.0
+	p := math.Pow(float64(pixel)/255.0, gamma)
+	l := math.Pow(float64(lower)/255.0, gamma)
+	u := math.Pow(float64(upper)/255.0, gamma)
 	if ((p - l) / (u - l)) > noise {
 		return uint8(upper)
 	}
