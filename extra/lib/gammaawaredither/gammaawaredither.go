@@ -60,26 +60,95 @@ func Dither(src image.Image, lossiness int, opts *DitherOptions) (image.Image, e
 	} else if lossiness > 7 {
 		lossiness = 7
 	}
-	shift := uint32(lossiness + 8) // +8 to convert from 16-bit to 8-bit color.
-	unshift := &unshiftTables[lossiness]
+	lossiness32 := uint32(lossiness)
 	gamma := opts.gamma()
 
 	bounds := src64.Bounds()
 	dst := image.NewRGBA(bounds)
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			// TODO: Actually dither, in a gamma-aware fashion.
-			_ = gamma
-			pix := src64.RGBA64At(x, y)
+			pixel := src64.RGBA64At(x, y)
+			noise := noiseTable[y&15][x&15]
 			dst.SetRGBA(x, y, color.RGBA{
-				R: unshift[uint8(pix.R>>shift)],
-				G: unshift[uint8(pix.G>>shift)],
-				B: unshift[uint8(pix.B>>shift)],
-				A: unshift[uint8(pix.A>>shift)],
+				// The ">>8" converts from 16-bit to 8-bit color.
+				R: dither(lossiness32, uint8(pixel.R>>8), noise, gamma),
+				G: dither(lossiness32, uint8(pixel.G>>8), noise, gamma),
+				B: dither(lossiness32, uint8(pixel.B>>8), noise, gamma),
+				A: dither(lossiness32, uint8(pixel.A>>8), noise, gamma),
 			})
 		}
 	}
 	return dst, nil
+}
+
+func dither(lossiness uint32, pixel uint8, noise float64, gamma float64) uint8 {
+	// The maximum pixel value remains unchanged after dithering.
+	if pixel >= 0xFF {
+		return 0xFF
+	}
+
+	// Find the lower (inclusive) and upper (exclusive) quantized values that
+	// bracket the pixel value.
+	lowShifted := uint8(0)
+	if shifted := pixel >> lossiness; shifted > 0 {
+		lowShifted = shifted - 1
+	}
+	unshift := &unshiftTables[lossiness]
+	lower := unshift[lowShifted+0]
+	upper := unshift[lowShifted+1]
+	if pixel >= upper {
+		lower = unshift[lowShifted+1]
+		upper = unshift[lowShifted+2]
+	}
+
+	// Compare the pixel's position in that bracket to the noise.
+	// TODO: use gamma.
+	p := float64(pixel) / 255.0
+	l := float64(lower) / 255.0
+	u := float64(upper) / 255.0
+	if ((p - l) / (u - l)) > noise {
+		return uint8(upper)
+	}
+	return uint8(lower)
+}
+
+// noiseTable is a 16x16 blue noise texture, based on "LDR_LLL1_42.png" from
+// the zip file linked to from http://momentsingraphics.de/BlueNoise.html and
+// whose LICENSE.txt says "To the extent possible under law, Christoph Peters
+// has waived all copyright and related or neighboring rights".
+var noiseTable = [16][16]float64{
+	{0xAE / 256.0, 0xE7 / 256.0, 0x89 / 256.0, 0xF2 / 256.0, 0x26 / 256.0, 0x1A / 256.0, 0x8C / 256.0, 0xF7 / 256.0,
+		0xC1 / 256.0, 0x69 / 256.0, 0xA4 / 256.0, 0x30 / 256.0, 0x91 / 256.0, 0xCC / 256.0, 0x64 / 256.0, 0x52 / 256.0},
+	{0x71 / 256.0, 0x1C / 256.0, 0x5E / 256.0, 0x7B / 256.0, 0xA9 / 256.0, 0xD5 / 256.0, 0x62 / 256.0, 0x08 / 256.0,
+		0xCE / 256.0, 0x49 / 256.0, 0x0E / 256.0, 0x55 / 256.0, 0x7A / 256.0, 0x18 / 256.0, 0xA6 / 256.0, 0x05 / 256.0},
+	{0xD8 / 256.0, 0xBF / 256.0, 0x99 / 256.0, 0x01 / 256.0, 0x56 / 256.0, 0xE4 / 256.0, 0x72 / 256.0, 0xB2 / 256.0,
+		0x36 / 256.0, 0x97 / 256.0, 0xD9 / 256.0, 0xED / 256.0, 0xBC / 256.0, 0x25 / 256.0, 0xF8 / 256.0, 0x96 / 256.0},
+	{0x2B / 256.0, 0x3B / 256.0, 0xFE / 256.0, 0xB6 / 256.0, 0x41 / 256.0, 0x2F / 256.0, 0x9F / 256.0, 0xE9 / 256.0,
+		0x1D / 256.0, 0x85 / 256.0, 0xAC / 256.0, 0x6D / 256.0, 0x3E / 256.0, 0xD1 / 256.0, 0x47 / 256.0, 0x80 / 256.0},
+	{0x66 / 256.0, 0x4F / 256.0, 0x13 / 256.0, 0xD2 / 256.0, 0x83 / 256.0, 0xC2 / 256.0, 0x0F / 256.0, 0x51 / 256.0,
+		0xFB / 256.0, 0x60 / 256.0, 0x2A / 256.0, 0x00 / 256.0, 0x9D / 256.0, 0x5B / 256.0, 0xB5 / 256.0, 0xE2 / 256.0},
+	{0xC8 / 256.0, 0xAA / 256.0, 0x90 / 256.0, 0xEB / 256.0, 0x6B / 256.0, 0x23 / 256.0, 0x94 / 256.0, 0x79 / 256.0,
+		0x40 / 256.0, 0xCA / 256.0, 0xDE / 256.0, 0x76 / 256.0, 0xF5 / 256.0, 0x16 / 256.0, 0x8B / 256.0, 0x0B / 256.0},
+	{0xF3 / 256.0, 0x20 / 256.0, 0x77 / 256.0, 0x33 / 256.0, 0x5C / 256.0, 0xCB / 256.0, 0xE1 / 256.0, 0xA8 / 256.0,
+		0xBB / 256.0, 0x14 / 256.0, 0x8E / 256.0, 0xB0 / 256.0, 0x4D / 256.0, 0xC3 / 256.0, 0x34 / 256.0, 0x70 / 256.0},
+	{0x58 / 256.0, 0x45 / 256.0, 0xDB / 256.0, 0xA5 / 256.0, 0x0D / 256.0, 0x4A / 256.0, 0xF4 / 256.0, 0x04 / 256.0,
+		0x68 / 256.0, 0x57 / 256.0, 0x31 / 256.0, 0xE5 / 256.0, 0x1E / 256.0, 0x82 / 256.0, 0xE8 / 256.0, 0xA2 / 256.0},
+	{0x95 / 256.0, 0x03 / 256.0, 0xBD / 256.0, 0xFA / 256.0, 0x8A / 256.0, 0xB3 / 256.0, 0x28 / 256.0, 0x3A / 256.0,
+		0x86 / 256.0, 0xA1 / 256.0, 0xD3 / 256.0, 0x43 / 256.0, 0x9A / 256.0, 0x63 / 256.0, 0xCD / 256.0, 0x27 / 256.0},
+	{0xD7 / 256.0, 0x65 / 256.0, 0x81 / 256.0, 0x1B / 256.0, 0x54 / 256.0, 0x6E / 256.0, 0x98 / 256.0, 0xDA / 256.0,
+		0xC5 / 256.0, 0xEE / 256.0, 0x0C / 256.0, 0x6F / 256.0, 0xFF / 256.0, 0x06 / 256.0, 0x3D / 256.0, 0xB9 / 256.0},
+	{0xF1 / 256.0, 0xAD / 256.0, 0x2E / 256.0, 0x3F / 256.0, 0xCF / 256.0, 0xEC / 256.0, 0x7C / 256.0, 0x19 / 256.0,
+		0x5F / 256.0, 0x22 / 256.0, 0x7F / 256.0, 0xAF / 256.0, 0xBE / 256.0, 0x53 / 256.0, 0x7D / 256.0, 0x17 / 256.0},
+	{0x48 / 256.0, 0x73 / 256.0, 0xE6 / 256.0, 0xC4 / 256.0, 0xA0 / 256.0, 0x07 / 256.0, 0x46 / 256.0, 0xB7 / 256.0,
+		0xF9 / 256.0, 0x4E / 256.0, 0x37 / 256.0, 0x92 / 256.0, 0x2C / 256.0, 0xDC / 256.0, 0xA7 / 256.0, 0x8D / 256.0},
+	{0x5A / 256.0, 0x09 / 256.0, 0x93 / 256.0, 0x24 / 256.0, 0x61 / 256.0, 0xD6 / 256.0, 0x32 / 256.0, 0x8F / 256.0,
+		0x6C / 256.0, 0xA3 / 256.0, 0xD0 / 256.0, 0xEA / 256.0, 0x15 / 256.0, 0x67 / 256.0, 0xF6 / 256.0, 0x35 / 256.0},
+	{0xD4 / 256.0, 0xB4 / 256.0, 0xFC / 256.0, 0x50 / 256.0, 0x84 / 256.0, 0xAB / 256.0, 0x11 / 256.0, 0xC6 / 256.0,
+		0xE3 / 256.0, 0x02 / 256.0, 0x42 / 256.0, 0x75 / 256.0, 0xC7 / 256.0, 0x9E / 256.0, 0x21 / 256.0, 0xC0 / 256.0},
+	{0x10 / 256.0, 0x9B / 256.0, 0x6A / 256.0, 0x12 / 256.0, 0xDF / 256.0, 0x74 / 256.0, 0xF0 / 256.0, 0x59 / 256.0,
+		0x29 / 256.0, 0xB1 / 256.0, 0x88 / 256.0, 0x5D / 256.0, 0x0A / 256.0, 0x4C / 256.0, 0x87 / 256.0, 0x78 / 256.0},
+	{0x2D / 256.0, 0x44 / 256.0, 0xC9 / 256.0, 0x38 / 256.0, 0xBA / 256.0, 0x4B / 256.0, 0x9C / 256.0, 0x3C / 256.0,
+		0x7E / 256.0, 0x1F / 256.0, 0xE0 / 256.0, 0xFD / 256.0, 0xB8 / 256.0, 0x39 / 256.0, 0xEF / 256.0, 0xDD / 256.0},
 }
 
 // unshift[n][x] expands the low (8 - n) bits of x to range from 0x00 to 0xFF
