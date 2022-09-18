@@ -33,25 +33,38 @@ var (
 	ErrNotAPNG         = errors.New("pnggamma: not a PNG")
 )
 
+// DecodeGammaResult is the type returned by DecodeGamma (along with an error).
+type DecodeGammaResult struct {
+	Gamma     float64
+	GAMAChunk []byte
+	ICCPChunk []byte
+	SRGBChunk []byte
+}
+
 // DecodeGamma returns the gamma correction value from a PNG-encoded image.
 // These are optional. It is valid for PNG images to not contain a gamma.
 //
-// This function returns:
+// This function returns a Gamma float64 value and an error (and other []byte
+// typed fields):
 //   - (aPositiveNumber, nil) if the input is a valid PNG image that explicitly
 //     states its gamma.
 //   - (DefaultGamma, ErrNoExplicitGamma) if the input is a valid PNG image
 //     that does not explicitly state its gamma.
 //   - (DefaultGamma, ErrNotAPNG) if the input is not a valid PNG image.
 //
-// The float64 returned is always positive (and DefaultGamma, 2.2, is a
+// The Gamma float64 returned is always positive (and DefaultGamma, 2.2, is a
 // reasonable value to use) regardless of the error returned's nil-ness.
+//
+// It also returns the "gAMA", "iCCP" and "sRGB" chunks of encodedPNG, if
+// present. All three chunks are optional in the PNG file format.
 //
 // "A valid PNG image" is not comprehensively checked, as e.g. zlib
 // decompression validity checking is much more computationally expensive than
 // simply parsing a gamma correction value. There may be false positives.
-func DecodeGamma(encodedPNG []byte) (float64, error) {
+func DecodeGamma(encodedPNG []byte) (DecodeGammaResult, error) {
+	ret := DecodeGammaResult{Gamma: DefaultGamma}
 	if (len(encodedPNG) < 8) || (string(encodedPNG[:8]) != "\x89PNG\r\n\x1a\n") {
-		return DefaultGamma, ErrNotAPNG
+		return ret, ErrNotAPNG
 	}
 
 	gamaChunkGamma := 0.0
@@ -60,8 +73,9 @@ func DecodeGamma(encodedPNG []byte) (float64, error) {
 	for src := encodedPNG[8:]; len(src) >= 12; {
 		chunkLen := u32be(src)
 		if uint64(len(src)) < (12 + uint64(chunkLen)) {
-			return DefaultGamma, ErrNotAPNG
+			return ret, ErrNotAPNG
 		}
+		chunk := src[:12+uint64(chunkLen)]
 		src = src[4:]
 
 		chunkTag := u32be(src)
@@ -72,16 +86,19 @@ func DecodeGamma(encodedPNG []byte) (float64, error) {
 			// srgbChunkGamma and gamaChunkGamma, but we don't in practice. See
 			// the other "In theory..." comment below.
 			if srgbChunkGamma > 0 {
-				return srgbChunkGamma, nil
+				ret.Gamma = srgbChunkGamma
+				return ret, nil
 			} else if gamaChunkGamma > 0 {
-				return gamaChunkGamma, nil
+				ret.Gamma = gamaChunkGamma
+				return ret, nil
 			}
-			return DefaultGamma, ErrNoExplicitGamma
+			return ret, ErrNoExplicitGamma
 
 		case 0x67414D41: // 'gAMA'be
-			if chunkLen != 4 {
-				break
+			if (chunkLen != 4) || (ret.GAMAChunk != nil) {
+				return ret, ErrNotAPNG
 			}
+			ret.GAMAChunk = chunk
 			inverseGamma := u32be(src)
 			// Special-case some common inverseGamma values to be more precise.
 			if inverseGamma == 45455 {
@@ -93,6 +110,10 @@ func DecodeGamma(encodedPNG []byte) (float64, error) {
 			}
 
 		case 0x69434350: // 'iCCP'be
+			if ret.ICCPChunk != nil {
+				return ret, ErrNotAPNG
+			}
+			ret.ICCPChunk = chunk
 			// In theory, we should parse the ICC profile and compute the gamma
 			// value from that. However, not all PNG decoders handle iCCP
 			// chunks, so the PNG specification says: "A PNG encoder that
@@ -104,13 +125,17 @@ func DecodeGamma(encodedPNG []byte) (float64, error) {
 			// probably not worth the complexity to implement.
 
 		case 0x73524742: // 'sRGB'be
+			if ret.SRGBChunk != nil {
+				return ret, ErrNotAPNG
+			}
+			ret.SRGBChunk = chunk
 			srgbChunkGamma = 2.2
 		}
 
 		// Skip the payload and checksum.
 		src = src[4+uint64(chunkLen):]
 	}
-	return DefaultGamma, ErrNotAPNG
+	return ret, ErrNotAPNG
 }
 
 func u32be(b []byte) uint32 {

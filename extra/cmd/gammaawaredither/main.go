@@ -54,15 +54,32 @@ func main1() error {
 	if err != nil {
 		return err
 	}
-	gamma, _ := pnggamma.DecodeGamma(src)
+	dg, _ := pnggamma.DecodeGamma(src)
 	if *gammaFlag > 0 {
-		gamma = *gammaFlag
+		dg.Gamma = *gammaFlag
 	}
-	dst, err := gammaawaredither.Dither(img, *lossinessFlag, &gammaawaredither.DitherOptions{
-		Gamma: gamma,
+	dstImage, err := gammaawaredither.Dither(img, *lossinessFlag, &gammaawaredither.DitherOptions{
+		Gamma: dg.Gamma,
 	})
 	if err != nil {
 		return err
 	}
-	return png.Encode(os.Stdout, dst)
+	dstBuffer := &bytes.Buffer{}
+	err = png.Encode(dstBuffer, dstImage)
+	if err != nil {
+		return err
+	}
+	dstBytes := dstBuffer.Bytes()
+
+	// Copy in the ICCP, SRGB and GAMA chunks if they were in the source PNG.
+	// They're spliced after the magic identifier (8 bytes) and IHDR chunk (25
+	// bytes) of the png.Encode result.
+	ret := []byte(nil)
+	ret = append(ret, dstBytes[:8+25]...)
+	ret = append(ret, dg.ICCPChunk...)
+	ret = append(ret, dg.SRGBChunk...)
+	ret = append(ret, dg.GAMAChunk...)
+	ret = append(ret, dstBytes[8+25:]...)
+	_, err = os.Stdout.Write(ret)
+	return err
 }
