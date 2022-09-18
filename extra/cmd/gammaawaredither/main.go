@@ -30,7 +30,8 @@ import (
 )
 
 var (
-	lossiness = flag.Int("lossiness", 4, "From 0 (lossless for 8-bit color) to 7 (very lossy)")
+	gammaFlag     = flag.Float64("gamma", 0, "Overrides the input's gamma if positive; 1.0 means naive dithering")
+	lossinessFlag = flag.Int("lossiness", 4, "From 0 (lossless for 8-bit color) to 7 (very lossy)")
 )
 
 func main() {
@@ -54,7 +55,10 @@ func main1() error {
 		return err
 	}
 	gamma, _ := pnggamma.DecodeGamma(src)
-	dst, err := gammaawaredither.Dither(img, *lossiness, &gammaawaredither.DitherOptions{
+	if *gammaFlag > 0 {
+		gamma = *gammaFlag
+	}
+	dst, err := gammaawaredither.Dither(img, *lossinessFlag, &gammaawaredither.DitherOptions{
 		Gamma: gamma,
 	})
 	if err != nil {
