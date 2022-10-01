@@ -106,7 +106,7 @@ func dither(lossiness uint32, pixel uint8, noise float64, gamma float64) uint8 {
 	p := math.Pow(float64(pixel)/255.0, gamma)
 	l := math.Pow(float64(lower)/255.0, gamma)
 	u := math.Pow(float64(upper)/255.0, gamma)
-	if ((p - l) / (u - l)) > noise {
+	if (p - l) > (noise * (u - l)) {
 		return uint8(upper)
 	}
 	return uint8(lower)
