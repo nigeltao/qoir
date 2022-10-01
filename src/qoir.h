@@ -47,7 +47,7 @@ extern "C" {
 // -------- Compile-time Configuration
 
 // The compile-time configuration macros are:
-//  - QOIR_CONFIG__DISABLE_LOOK_UP_TABLES
+//  - QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES
 //  - QOIR_CONFIG__DISABLE_SIMD
 //  - QOIR_CONFIG__STATIC_FUNCTIONS
 //  - QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
@@ -322,6 +322,17 @@ typedef struct qoir_encode_options_struct {
 
   // Lossiness ranges from 0 (lossless) to 7 (very lossy), inclusive.
   uint32_t lossiness;
+
+  // Whether to dither the lossy encoding. This option has no effect if
+  // lossiness is zero.
+  //
+  // The dithering algorithm is relatively simple. Fancier algorithms like
+  // https://nigeltao.github.io/blog/2022/gamma-aware-ordered-dithering.html
+  // can produce higher quality results, especially for lossiness levels at 6
+  // or 7 re overall brightness, but they are out of scope of this library. To
+  // use alternative dithering algorithms, apply them to src_pixbuf before
+  // passing to qoir_encode.
+  bool dither;
 } qoir_encode_options;
 
 QOIR_MAYBE_STATIC qoir_encode_result      //
@@ -435,8 +446,9 @@ qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
 #endif
 }
 
-#if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
+static uint8_t qoir_private_table_noise[16][16];
 static uint8_t qoir_private_table_unlossify[7][256];
+#if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
 static uint8_t qoir_private_table_luma[65536];
 #endif
 
@@ -1440,7 +1452,7 @@ qoir_private_decode_tile_opcodes(  //
       dp += 4;
 
     } else if ((s64 & 0x03) == 2) {  // QOIR_OP_LUMA
-#if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
+#if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
       uint32_t delta8x4;
       memcpy(&delta8x4, qoir_private_table_luma - 2 + (uint16_t)s64, 4);
       uint32_t pixel8x4;
@@ -1681,7 +1693,6 @@ qoir_private_decode_qpix_payload(   //
       (*swizzle_func)(dp, dst_stride_in_bytes, literals, 4 * tw, tw, th);
 
       if (lossiness) {
-#if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
         uint8_t* unlossify = qoir_private_table_unlossify[lossiness - 1];
         for (uint32_t h = th; h > 0; h--) {
           for (uint32_t i = 0; i < (4 * tw); i++) {
@@ -1689,20 +1700,6 @@ qoir_private_decode_qpix_payload(   //
           }
           dp += dst_stride_in_bytes;
         }
-#else
-        uint32_t mask = (1 << (8 - lossiness)) - 1;
-        static const uint32_t muls[7] = {0x81, 0x41, 0x21, 0x11,
-                                         0x49, 0x55, 0xFF};
-        static const uint32_t shifts[7] = {6, 4, 2, 0, 1, 0, 0};
-        uint32_t mul = muls[lossiness - 1];
-        uint32_t shift = shifts[lossiness - 1];
-        for (uint32_t h = th; h > 0; h--) {
-          for (uint32_t i = 0; i < (4 * tw); i++) {
-            dp[i] = ((dp[i] & mask) * mul) >> shift;
-          }
-          dp += dst_stride_in_bytes;
-        }
-#endif
       }
     }
   }
@@ -1857,6 +1854,39 @@ fail_invalid_data:
 // -------- QOIR Encode
 
 #define QOIR_HASH_TABLE_SHIFT 10
+
+static QOIR_ALWAYS_INLINE void  //
+qoir_private_encode_dither(     //
+    uint8_t* ptr,               //
+    uint32_t lossiness,         //
+    uint32_t noise) {
+  if (*ptr >= 0xFF) {
+    *ptr = 0xFF >> lossiness;
+    return;
+  }
+
+  // Find the lower (inclusive) and upper (exclusive) quantized values that
+  // bracket the pixel value.
+  uint8_t low_shifted = 0;
+  uint8_t shifted = *ptr >> lossiness;
+  if (shifted > 0) {
+    low_shifted = shifted - 1;
+  }
+  uint8_t* unshift = qoir_private_table_unlossify[lossiness - 1];
+  uint8_t lower = unshift[low_shifted + 0];
+  uint8_t upper = unshift[low_shifted + 1];
+  if (*ptr >= upper) {
+    lower = unshift[low_shifted + 1];
+    upper = unshift[low_shifted + 2];
+  }
+
+  // Compare the pixel's position in that bracket to the noise.
+  uint32_t p = *ptr;
+  uint32_t l = lower;
+  uint32_t u = upper;
+  uint32_t m = ((256 * (p - l)) > (noise * (u - l))) ? u : l;
+  *ptr = (uint8_t)(m >> lossiness);
+}
 
 static QOIR_ALWAYS_INLINE qoir_size_result  //
 qoir_private_encode_tile_opcodes(           //
@@ -2085,7 +2115,8 @@ qoir_private_encode_qpix_payload(         //
     qoir_encode_buffer* encbuf,           //
     uint8_t* dst_ptr,                     //
     const qoir_pixel_buffer* src_pixbuf,  //
-    uint32_t lossiness) {
+    uint32_t lossiness,                   //
+    bool dither) {
   qoir_size_result result = {0};
 
   size_t height_in_tiles =
@@ -2160,10 +2191,25 @@ qoir_private_encode_qpix_payload(         //
                       sp, src_pixbuf->stride_in_bytes,  //
                       tw, th);
 
-      if (lossiness) {
+      if (lossiness == 0) {
+        // No-op.
+      } else if (!dither) {
         for (size_t i = 0; i < 4 * tw * th; i++) {
           encbuf->private_impl.literals[i + QOIR_LITERALS_PRE_PADDING] >>=
               lossiness;
+        }
+      } else {
+        uint8_t* ptr =
+            &encbuf->private_impl.literals[QOIR_LITERALS_PRE_PADDING];
+        for (size_t y = 0; y < th; y++) {
+          for (size_t x = 0; x < tw; x++) {
+            uint8_t noise = qoir_private_table_noise[y & 15][x & 15];
+            qoir_private_encode_dither(ptr + 0, lossiness, noise);
+            qoir_private_encode_dither(ptr + 1, lossiness, noise);
+            qoir_private_encode_dither(ptr + 2, lossiness, noise);
+            qoir_private_encode_dither(ptr + 3, lossiness, noise);
+            ptr += 4;
+          }
         }
       }
 
@@ -2300,8 +2346,8 @@ qoir_encode(                              //
     }
     free_encbuf = true;
   }
-  qoir_size_result r = qoir_private_encode_qpix_payload(encbuf, dst_ptr + 32,
-                                                        src_pixbuf, lossiness);
+  qoir_size_result r = qoir_private_encode_qpix_payload(
+      encbuf, dst_ptr + 32, src_pixbuf, lossiness, options && options->dither);
   if (free_encbuf) {
     QOIR_FREE(encbuf);
   }
@@ -2342,7 +2388,29 @@ qoir_encode(                              //
 // -------- Look-up Tables
 
 // clang-format off
-#if !defined(QOIR_CONFIG__DISABLE_LOOK_UP_TABLES)
+
+// qoir_private_table_noise is the "LDR_LLL1_42.png" 16x16 blue noise texture
+// from the zip file linked to from http://momentsingraphics.de/BlueNoise.html
+// and whose LICENSE.txt says "To the extent possible under law, Christoph
+// Peters has waived all copyright and related or neighboring rights".
+static uint8_t qoir_private_table_noise[16][16] = {
+  {0xAE,0xE7,0x89,0xF2,0x26,0x1A,0x8C,0xF7,0xC1,0x69,0xA4,0x30,0x91,0xCC,0x64,0x52},
+  {0x71,0x1C,0x5E,0x7B,0xA9,0xD5,0x62,0x08,0xCE,0x49,0x0E,0x55,0x7A,0x18,0xA6,0x05},
+  {0xD8,0xBF,0x99,0x01,0x56,0xE4,0x72,0xB2,0x36,0x97,0xD9,0xED,0xBC,0x25,0xF8,0x96},
+  {0x2B,0x3B,0xFE,0xB6,0x41,0x2F,0x9F,0xE9,0x1D,0x85,0xAC,0x6D,0x3E,0xD1,0x47,0x80},
+  {0x66,0x4F,0x13,0xD2,0x83,0xC2,0x0F,0x51,0xFB,0x60,0x2A,0x00,0x9D,0x5B,0xB5,0xE2},
+  {0xC8,0xAA,0x90,0xEB,0x6B,0x23,0x94,0x79,0x40,0xCA,0xDE,0x76,0xF5,0x16,0x8B,0x0B},
+  {0xF3,0x20,0x77,0x33,0x5C,0xCB,0xE1,0xA8,0xBB,0x14,0x8E,0xB0,0x4D,0xC3,0x34,0x70},
+  {0x58,0x45,0xDB,0xA5,0x0D,0x4A,0xF4,0x04,0x68,0x57,0x31,0xE5,0x1E,0x82,0xE8,0xA2},
+  {0x95,0x03,0xBD,0xFA,0x8A,0xB3,0x28,0x3A,0x86,0xA1,0xD3,0x43,0x9A,0x63,0xCD,0x27},
+  {0xD7,0x65,0x81,0x1B,0x54,0x6E,0x98,0xDA,0xC5,0xEE,0x0C,0x6F,0xFF,0x06,0x3D,0xB9},
+  {0xF1,0xAD,0x2E,0x3F,0xCF,0xEC,0x7C,0x19,0x5F,0x22,0x7F,0xAF,0xBE,0x53,0x7D,0x17},
+  {0x48,0x73,0xE6,0xC4,0xA0,0x07,0x46,0xB7,0xF9,0x4E,0x37,0x92,0x2C,0xDC,0xA7,0x8D},
+  {0x5A,0x09,0x93,0x24,0x61,0xD6,0x32,0x8F,0x6C,0xA3,0xD0,0xEA,0x15,0x67,0xF6,0x35},
+  {0xD4,0xB4,0xFC,0x50,0x84,0xAB,0x11,0xC6,0xE3,0x02,0x42,0x75,0xC7,0x9E,0x21,0xC0},
+  {0x10,0x9B,0x6A,0x12,0xDF,0x74,0xF0,0x59,0x29,0xB1,0x88,0x5D,0x0A,0x4C,0x87,0x78},
+  {0x2D,0x44,0xC9,0x38,0xBA,0x4B,0x9C,0x3C,0x7E,0x1F,0xE0,0xFD,0xB8,0x39,0xEF,0xDD},
+};
 
 // The table was generated by script/gen_table_unlossify.go
 static uint8_t qoir_private_table_unlossify[7][256] = {{
@@ -2466,6 +2534,7 @@ static uint8_t qoir_private_table_unlossify[7][256] = {{
   0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,
 }};
 
+#if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
 // The table was generated by script/gen_table_luma.go
 static uint8_t qoir_private_table_luma[65536] = {
     0xD8,0xE0,0xD8,0,0xD9,0xE1,0xD9,0,0xDA,0xE2,0xDA,0,0xDB,0xE3,0xDB,0,
@@ -6565,8 +6634,8 @@ static uint8_t qoir_private_table_luma[65536] = {
     0x1F,0x18,0x1F,0,0x20,0x19,0x20,0,0x21,0x1A,0x21,0,0x22,0x1B,0x22,0,
     0x23,0x1C,0x23,0,0x24,0x1D,0x24,0,0x25,0x1E,0x25,0,0x26,0x1F,0x26,0,
 };
-
 #endif
+
 // clang-format on
 
 // ================================ -Private Implementation

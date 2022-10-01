@@ -27,7 +27,13 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  161.34 gccEnc  272.02 gccDec  146.17 claEnc  165.61 claDec  Add QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
+PENDING  0.2526 CR  160.66 gccEnc  271.56 gccDec  146.06 claEnc  164.79 claDec  Add dither encoding option
+72a8d47  0.2526 CR  161.37 gccEnc  271.94 gccDec  145.81 claEnc  165.64 claDec  Have gammaawaredither preserve ancillary chunks
+7bf8326  0.2526 CR  160.92 gccEnc  271.82 gccDec  145.68 claEnc  165.73 claDec  Have gammaawaredither allow gamma override
+f4a6544  0.2526 CR  161.25 gccEnc  272.08 gccDec  145.09 claEnc  165.32 claDec  Have gammaawaredither actually use the gamma
+5cd7702  0.2526 CR  161.18 gccEnc  269.45 gccDec  146.15 claEnc  165.22 claDec  Have gammaawaredither actually dither
+1e8939b  0.2526 CR  160.87 gccEnc  271.94 gccDec  145.84 claEnc  165.45 claDec  Add gammaawaredither command-line tool (in Go)
+4279875  0.2526 CR  161.34 gccEnc  272.02 gccDec  146.17 claEnc  165.61 claDec  Add QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
 6f74b42  0.2526 CR  161.35 gccEnc  272.06 gccDec  146.01 claEnc  165.55 claDec  Remove masks from qoir_private_encode_tile_opcodes
 82c06b2  0.2526 CR  160.20 gccEnc  271.23 gccDec  141.72 claEnc  165.33 claDec  Roll back "Have encode dists table depend on etc"
 4886e8b  0.2526 CR  158.13 gccEnc  258.97 gccDec  140.25 claEnc  167.77 claDec  Have encode dists table depend on lossiness

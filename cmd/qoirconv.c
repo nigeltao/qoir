@@ -137,9 +137,9 @@ convert_from_qoir_to_png(const uint8_t* src_ptr, size_t src_len) {
 int  //
 usage() {
   fprintf(stderr,
-          "Usage:\n"                                     //
-          "  qoirconv --lossiness=L foo.png foo.qoir\n"  //
-          "  qoirconv foo.qoir foo.png\n"                //
+          "Usage:\n"                                              //
+          "  qoirconv --lossiness=L --dither foo.png foo.qoir\n"  //
+          "  qoirconv foo.qoir foo.png\n"                         //
           "  L ranges in 0 ..= 7; the default (0) means lossless\n");
   return 1;
 }
@@ -163,7 +163,10 @@ main(int argc, char** argv) {
       return usage();
     }
     arg++;
-    if (!strncmp(arg, "-lossiness=", 11)) {
+    if (!strncmp(arg, "-dither", 7)) {
+      encopts.dither = 1;
+      continue;
+    } else if (!strncmp(arg, "-lossiness=", 11)) {
       long int x = strtol(arg + 11, NULL, 10);
       if ((0 <= x) && (x < 8)) {
         encopts.lossiness = x;
