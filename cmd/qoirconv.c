@@ -30,6 +30,75 @@
 
 // ----
 
+static inline uint32_t  //
+peek_u32be(const uint8_t* p) {
+  return ((uint32_t)(p[0]) << 24) | ((uint32_t)(p[1]) << 16) |
+         ((uint32_t)(p[2]) << 8) | ((uint32_t)(p[3]) << 0);
+}
+
+typedef struct extract_png_metadata_result_struct {
+  const uint8_t* exif_ptr;
+  size_t exif_len;
+
+  const uint8_t* iccp_ptr;
+  size_t iccp_len;
+
+  const uint8_t* xmp_ptr;
+  size_t xmp_len;
+} extract_png_metadata_result;
+
+static extract_png_metadata_result  //
+extract_png_metadata(const uint8_t* src_ptr, size_t src_len) {
+  extract_png_metadata_result result = {0};
+  if ((src_len < 8) || (peek_u32be(src_ptr + 0) != 0x89504E47) ||
+      (peek_u32be(src_ptr + 4) != 0x0D0A1A0A)) {
+    return result;
+  }
+  src_ptr += 8;
+  src_len -= 8;
+  while (src_len >= 8) {
+    uint32_t chunk_len = peek_u32be(src_ptr + 0);
+    uint32_t chunk_tag = peek_u32be(src_ptr + 4);
+    src_ptr += 8;
+    src_len -= 8;
+    if (src_len < chunk_len) {
+      return result;
+    }
+    switch (chunk_tag) {
+      case 0x65584966: {  // 'eXIf'be
+        result.exif_ptr = src_ptr;
+        result.exif_len = chunk_len;
+        break;
+      }
+      case 0x69434350: {  // 'iCCP'be
+        result.iccp_ptr = src_ptr;
+        result.iccp_len = chunk_len;
+        break;
+      }
+      case 0x69545874: {  // 'iTXt'be
+        // There are five NUL bytes at the end. The first terminates the
+        // keyword. The second and third are compression flag and method. The
+        // last two terminate the empty language tag and translated keyword.
+        // See https://www.w3.org/TR/2003/REC-PNG-20031110/#11iTXt
+        static const char* xmp_magic = "XML:com.adobe.xmp\x00\x00\x00\x00\x00";
+        if ((chunk_len >= 22) && (memcmp(xmp_magic, src_ptr, 22) == 0)) {
+          result.xmp_ptr = src_ptr + 22;
+          result.xmp_len = chunk_len - 22;
+        }
+        break;
+      }
+    }
+    src_ptr += chunk_len;
+    src_len -= chunk_len;
+    if (src_len < 4) {
+      return result;
+    }
+    src_ptr += 4;
+    src_len -= 4;
+  }
+  return result;
+}
+
 load_file_result  //
 convert_from_png_to_qoir(const uint8_t* src_ptr,
                          size_t src_len,
@@ -57,6 +126,25 @@ convert_from_png_to_qoir(const uint8_t* src_ptr,
     return result;
   }
 
+  qoir_encode_options local_enc_opts = {0};
+  if (enc_opts) {
+    memcpy(&local_enc_opts, enc_opts, sizeof(qoir_encode_options));
+  }
+  extract_png_metadata_result png_metadata =
+      extract_png_metadata(src_ptr, src_len);
+  if (local_enc_opts.metadata_iccp_len == 0) {
+    local_enc_opts.metadata_iccp_ptr = png_metadata.iccp_ptr;
+    local_enc_opts.metadata_iccp_len = png_metadata.iccp_len;
+  }
+  if (local_enc_opts.metadata_exif_len == 0) {
+    local_enc_opts.metadata_exif_ptr = png_metadata.exif_ptr;
+    local_enc_opts.metadata_exif_len = png_metadata.exif_len;
+  }
+  if (local_enc_opts.metadata_xmp_len == 0) {
+    local_enc_opts.metadata_xmp_ptr = png_metadata.xmp_ptr;
+    local_enc_opts.metadata_xmp_len = png_metadata.xmp_len;
+  }
+
   qoir_pixel_buffer pixbuf;
   pixbuf.pixcfg.pixfmt = (channels == 3) ? QOIR_PIXEL_FORMAT__RGB
                                          : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
@@ -64,7 +152,7 @@ convert_from_png_to_qoir(const uint8_t* src_ptr,
   pixbuf.pixcfg.height_in_pixels = height;
   pixbuf.data = (uint8_t*)pixbuf_data;
   pixbuf.stride_in_bytes = (size_t)channels * (size_t)width;
-  qoir_encode_result enc = qoir_encode(&pixbuf, enc_opts);
+  qoir_encode_result enc = qoir_encode(&pixbuf, &local_enc_opts);
   stbi_image_free(pixbuf_data);
   if (enc.status_message) {
     free(enc.owned_memory);

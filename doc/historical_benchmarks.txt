@@ -27,7 +27,9 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  160.66 gccEnc  271.56 gccDec  146.06 claEnc  164.79 claDec  Add dither encoding option
+PENDING  0.2526 CR  161.40 gccEnc  271.96 gccDec  142.45 claEnc  171.02 claDec  Add metadata (ICCP, EXIF, XMP) support
+2ba31e2  0.2526 CR  161.04 gccEnc  271.99 gccDec  146.03 claEnc  164.93 claDec  Have gammaawaredither use multiply not divide
+1d31c28  0.2526 CR  160.66 gccEnc  271.56 gccDec  146.06 claEnc  164.79 claDec  Add dither encoding option
 72a8d47  0.2526 CR  161.37 gccEnc  271.94 gccDec  145.81 claEnc  165.64 claDec  Have gammaawaredither preserve ancillary chunks
 7bf8326  0.2526 CR  160.92 gccEnc  271.82 gccDec  145.68 claEnc  165.73 claDec  Have gammaawaredither allow gamma override
 f4a6544  0.2526 CR  161.25 gccEnc  272.08 gccDec  145.09 claEnc  165.32 claDec  Have gammaawaredither actually use the gamma

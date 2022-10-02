@@ -98,6 +98,7 @@ extern const char qoir_lz4_status_message__error_src_is_too_long[];
 extern const char qoir_status_message__error_invalid_argument[];
 extern const char qoir_status_message__error_invalid_data[];
 extern const char qoir_status_message__error_out_of_memory[];
+extern const char qoir_status_message__error_unsupported_metadata_size[];
 extern const char qoir_status_message__error_unsupported_pixbuf_dimensions[];
 extern const char qoir_status_message__error_unsupported_pixfmt[];
 extern const char qoir_status_message__error_unsupported_tile_format[];
@@ -269,6 +270,17 @@ typedef struct qoir_decode_result_struct {
   const char* status_message;
   void* owned_memory;
   qoir_pixel_buffer dst_pixbuf;
+
+  // Optional metadata chunks.
+
+  const uint8_t* metadata_iccp_ptr;
+  size_t metadata_iccp_len;
+
+  const uint8_t* metadata_exif_ptr;
+  size_t metadata_exif_len;
+
+  const uint8_t* metadata_xmp_ptr;
+  size_t metadata_xmp_len;
 } qoir_decode_result;
 
 typedef struct qoir_decode_options_struct {
@@ -319,6 +331,17 @@ typedef struct qoir_encode_options_struct {
   void* memory_func_context;
 
   qoir_encode_buffer* encbuf;
+
+  // Optional metadata chunks.
+
+  const uint8_t* metadata_iccp_ptr;
+  size_t metadata_iccp_len;
+
+  const uint8_t* metadata_exif_ptr;
+  size_t metadata_exif_len;
+
+  const uint8_t* metadata_xmp_ptr;
+  size_t metadata_xmp_len;
 
   // Lossiness ranges from 0 (lossless) to 7 (very lossy), inclusive.
   uint32_t lossiness;
@@ -446,6 +469,13 @@ qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
 #endif
 }
 
+static inline bool  //
+qoir_private_u64_overflow_add(uint64_t* x, uint64_t y) {
+  uint64_t old = *x;
+  *x += y;
+  return *x < old;
+}
+
 static uint8_t qoir_private_table_noise[16][16];
 static uint8_t qoir_private_table_unlossify[7][256];
 #if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
@@ -522,6 +552,8 @@ const char qoir_status_message__error_invalid_data[] =  //
     "#qoir: invalid data";
 const char qoir_status_message__error_out_of_memory[] =  //
     "#qoir: out of memory";
+const char qoir_status_message__error_unsupported_metadata_size[] =  //
+    "#qoir: unsupported metadata size";
 const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
     "#qoir: unsupported pixbuf dimensions";
 const char qoir_status_message__error_unsupported_pixfmt[] =  //
@@ -1717,6 +1749,7 @@ qoir_decode(                          //
     const size_t src_len,             //
     const qoir_decode_options* options) {
   qoir_decode_result result = {0};
+  qoir_decode_result pending_result = {0};
   if ((src_len < 44) ||
       (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
     result.status_message = qoir_status_message__error_invalid_data;
@@ -1827,6 +1860,27 @@ qoir_decode(                          //
       } else if (payload_len != 0) {
         goto fail_invalid_data;
       }
+
+    } else if (chunk_type == 0x50434349) {  // "ICCP"le.
+      if (pending_result.metadata_iccp_ptr) {
+        goto fail_invalid_data;
+      }
+      pending_result.metadata_iccp_ptr = sp;
+      pending_result.metadata_iccp_len = payload_len;
+
+    } else if (chunk_type == 0x46495845) {  // "EXIF"le.
+      if (pending_result.metadata_exif_ptr) {
+        goto fail_invalid_data;
+      }
+      pending_result.metadata_exif_ptr = sp;
+      pending_result.metadata_exif_len = payload_len;
+
+    } else if (chunk_type == 0x20504D58) {  // "XMP "le.
+      if (pending_result.metadata_xmp_ptr) {
+        goto fail_invalid_data;
+      }
+      pending_result.metadata_xmp_ptr = sp;
+      pending_result.metadata_xmp_len = payload_len;
     }
 
     sp += payload_len;
@@ -1843,6 +1897,12 @@ qoir_decode(                          //
   result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
   result.dst_pixbuf.data = pixbuf_data;
   result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
+  result.metadata_iccp_ptr = pending_result.metadata_iccp_ptr;
+  result.metadata_iccp_len = pending_result.metadata_iccp_len;
+  result.metadata_exif_ptr = pending_result.metadata_exif_ptr;
+  result.metadata_exif_len = pending_result.metadata_exif_len;
+  result.metadata_xmp_ptr = pending_result.metadata_xmp_ptr;
+  result.metadata_xmp_len = pending_result.metadata_xmp_len;
   return result;
 
 fail_invalid_data:
@@ -2307,13 +2367,39 @@ qoir_encode(                              //
       (QOIR_TILE_LZ4_COMPRESSION_WORST_CASE -
        (4 * QOIR_TS2));  // We might temporarily write more than (4 * QOIR_TS2)
                          // bytes when LZ4 compressing each tile.
+  if (options) {
+    bool overflow = false;
+    if (options->metadata_iccp_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_iccp_len);
+    }
+    if (options->metadata_exif_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_exif_len);
+    }
+    if (options->metadata_xmp_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_xmp_len);
+    }
+    if (overflow) {
+      result.status_message =
+          qoir_status_message__error_unsupported_metadata_size;
+      return result;
+    }
+  }
   if (dst_len_worst_case > SIZE_MAX) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
     return result;
   }
-  uint8_t* dst_ptr = QOIR_MALLOC((size_t)dst_len_worst_case);
-  if (!dst_ptr) {
+  uint8_t* const original_dst_ptr = QOIR_MALLOC((size_t)dst_len_worst_case);
+  if (!original_dst_ptr) {
     result.status_message = qoir_status_message__error_out_of_memory;
     return result;
   }
@@ -2324,6 +2410,7 @@ qoir_encode(                              //
       lossiness = 7;
     }
   }
+  uint8_t* dst_ptr = original_dst_ptr;
 
   // QOIR chunk.
   qoir_private_poke_u32le(dst_ptr + 0, 0x52494F51);  // "QOIR"le.
@@ -2332,44 +2419,73 @@ qoir_encode(                              //
   qoir_private_poke_u32le(dst_ptr + 16, src_pixbuf->pixcfg.height_in_pixels);
   dst_ptr[15] = dst_pixfmt;
   dst_ptr[19] = lossiness;
+  dst_ptr += 20;
+
+  // ICCP chunk.
+  if (options && options->metadata_iccp_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x50434349);  // "ICCP"le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_iccp_len);
+    memcpy(dst_ptr + 12, options->metadata_iccp_ptr,
+           options->metadata_iccp_len);
+    dst_ptr += 12 + options->metadata_iccp_len;
+  }
 
   // QPIX chunk.
-  qoir_private_poke_u32le(dst_ptr + 20, 0x58495051);  // "QPIX"le.
+  qoir_private_poke_u32le(dst_ptr, 0x58495051);  // "QPIX"le.
   qoir_encode_buffer* encbuf = options ? options->encbuf : NULL;
   bool free_encbuf = false;
   if (!encbuf) {
     encbuf = (qoir_encode_buffer*)QOIR_MALLOC(sizeof(qoir_encode_buffer));
     if (!encbuf) {
       result.status_message = qoir_status_message__error_out_of_memory;
-      QOIR_FREE(dst_ptr);
+      QOIR_FREE(original_dst_ptr);
       return result;
     }
     free_encbuf = true;
   }
   qoir_size_result r = qoir_private_encode_qpix_payload(
-      encbuf, dst_ptr + 32, src_pixbuf, lossiness, options && options->dither);
+      encbuf, dst_ptr + 12, src_pixbuf, lossiness, options && options->dither);
   if (free_encbuf) {
     QOIR_FREE(encbuf);
   }
   if (r.status_message) {
     result.status_message = r.status_message;
-    QOIR_FREE(dst_ptr);
+    QOIR_FREE(original_dst_ptr);
     return result;
   } else if ((uint64_t)r.value > 0x7FFFFFFFFFFFFFFFull) {
     result.status_message =
         qoir_status_message__error_unsupported_pixbuf_dimensions;
-    QOIR_FREE(dst_ptr);
+    QOIR_FREE(original_dst_ptr);
     return result;
   }
-  qoir_private_poke_u64le(dst_ptr + 24, r.value);
+  qoir_private_poke_u64le(dst_ptr + 4, r.value);
+  dst_ptr += 12 + r.value;
+
+  // EXIF chunk.
+  if (options && options->metadata_exif_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x46495845);  // "EXIF"le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_exif_len);
+    memcpy(dst_ptr + 12, options->metadata_exif_ptr,
+           options->metadata_exif_len);
+    dst_ptr += 12 + options->metadata_exif_len;
+  }
+
+  // XMP chunk.
+  if (options && options->metadata_xmp_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x20504D58);  // "XMP "le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_xmp_len);
+    memcpy(dst_ptr + 12, options->metadata_xmp_ptr, options->metadata_xmp_len);
+    dst_ptr += 12 + options->metadata_xmp_len;
+  }
 
   // QEND chunk.
-  qoir_private_poke_u32le(dst_ptr + 32 + r.value, 0x444E4551);  // "QEND"le.
-  qoir_private_poke_u64le(dst_ptr + 36 + r.value, 0);
+  qoir_private_poke_u32le(dst_ptr + 0, 0x444E4551);  // "QEND"le.
+  qoir_private_poke_u64le(dst_ptr + 4, 0);
+  dst_ptr += 12;
 
-  result.owned_memory = dst_ptr;
-  result.dst_ptr = dst_ptr;
-  result.dst_len = 44 + r.value;
+  result.owned_memory = original_dst_ptr;
+  result.dst_ptr = original_dst_ptr;
+  result.dst_len = dst_ptr - original_dst_ptr;
   return result;
 }
 
