@@ -1725,9 +1725,11 @@ qoir_private_decode_qpix_payload(   //
       (*swizzle_func)(dp, dst_stride_in_bytes, literals, 4 * tw, tw, th);
 
       if (lossiness) {
-        uint8_t* unlossify = qoir_private_table_unlossify[lossiness - 1];
+        const uint32_t i_max =
+            qoir_pixel_format__bytes_per_pixel(dst_pixfmt) * tw;
+        const uint8_t* unlossify = qoir_private_table_unlossify[lossiness - 1];
         for (uint32_t h = th; h > 0; h--) {
-          for (uint32_t i = 0; i < (4 * tw); i++) {
+          for (uint32_t i = 0; i < i_max; i++) {
             dp[i] = unlossify[dp[i]];
           }
           dp += dst_stride_in_bytes;
