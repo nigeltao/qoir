@@ -373,6 +373,19 @@ typedef struct qoir_decode_options_struct {
   // A zero-valued pixfmt field is equivalent to the default pixel format:
   // QOIR_PIXEL_FORMAT__RGBA_NONPREMUL.
   qoir_pixel_format pixfmt;
+
+  // Clipping rectangles, in the destination or source (or both) coordinate
+  // spaces. The clips (the qoir_rectangle typed fields) have no effect unless
+  // the corresponding boolean typed field is true.
+  qoir_rectangle dst_clip_rectangle;
+  qoir_rectangle src_clip_rectangle;
+  bool use_dst_clip_rectangle;
+  bool use_src_clip_rectangle;
+
+  // The position (in destination coordinate space) to place the top-left
+  // corner of the decoded source image. The Y axis grows down.
+  int32_t offset_x;
+  int32_t offset_y;
 } qoir_decode_options;
 
 // Decodes a pixel buffer from the QOIR format.
@@ -1695,19 +1708,29 @@ qoir_private_decode_tile_opcodes(  //
   return result;
 }
 
-static const char*                  //
-qoir_private_decode_qpix_payload(   //
-    qoir_decode_buffer* decbuf,     //
-    qoir_pixel_buffer dst_pixbuf,   //
-    qoir_pixel_format src_pixfmt,   //
-    uint32_t src_width_in_pixels,   //
-    uint32_t src_height_in_pixels,  //
-    const uint8_t* src_ptr,         //
-    size_t src_len,                 //
+static const char*                      //
+qoir_private_decode_qpix_payload(       //
+    qoir_decode_buffer* decbuf,         //
+    qoir_pixel_buffer dst_pixbuf,       //
+    qoir_rectangle dst_clip_rectangle,  //
+    qoir_pixel_format src_pixfmt,       //
+    uint32_t src_width_in_pixels,       //
+    uint32_t src_height_in_pixels,      //
+    const uint8_t* src_ptr,             //
+    size_t src_len,                     //
+    qoir_rectangle src_clip_rectangle,  //
+    int32_t offset_x,                   //
+    int32_t offset_y,                   //
     uint32_t lossiness) {
-  qoir_rectangle dst_rect =
+  qoir_rectangle dst_clip_rect =
       qoir_make_rectangle(0, 0, (int32_t)dst_pixbuf.pixcfg.width_in_pixels,
                           (int32_t)dst_pixbuf.pixcfg.height_in_pixels);
+  dst_clip_rect = qoir_rectangle__intersect(dst_clip_rect, dst_clip_rectangle);
+  qoir_rectangle dst_clip_rect_in_src_space;
+  dst_clip_rect_in_src_space.x0 = dst_clip_rect.x0 - offset_x;
+  dst_clip_rect_in_src_space.y0 = dst_clip_rect.y0 - offset_y;
+  dst_clip_rect_in_src_space.x1 = dst_clip_rect.x1 - offset_x;
+  dst_clip_rect_in_src_space.y1 = dst_clip_rect.y1 - offset_y;
 
   size_t height_in_tiles =
       qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
@@ -1745,7 +1768,10 @@ qoir_private_decode_qpix_payload(   //
       qoir_rectangle src_clip_rect =
           qoir_make_rectangle((int32_t)(tx + 0), (int32_t)(ty + 0),
                               (int32_t)(tx + tw), (int32_t)(ty + th));
-      src_clip_rect = qoir_rectangle__intersect(src_clip_rect, dst_rect);
+      src_clip_rect =
+          qoir_rectangle__intersect(src_clip_rect, src_clip_rectangle);
+      src_clip_rect =
+          qoir_rectangle__intersect(src_clip_rect, dst_clip_rect_in_src_space);
 
       if (src_len < 4) {
         return qoir_status_message__error_invalid_data;
@@ -1836,9 +1862,14 @@ qoir_private_decode_qpix_payload(   //
         literals = decbuf->private_impl.opcodes;
       }
 
-      uint8_t* dp = dst_pixbuf.data + (dst_pixbuf.stride_in_bytes * ty) +
-                    (num_dst_channels * tx);
-      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, literals, 4 * tw,
+      uint8_t* dp =
+          dst_pixbuf.data +
+          ((src_clip_rect.y0 + offset_y) * dst_pixbuf.stride_in_bytes) +
+          ((src_clip_rect.x0 + offset_x) * num_dst_channels);
+      const uint8_t* sp = literals +
+                          ((src_clip_rect.y0 & QOIR_TILE_MASK) * 4 * tw) +
+                          ((src_clip_rect.x0 & QOIR_TILE_MASK) * 4);
+      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, sp, 4 * tw,
                       qoir_rectangle__width(src_clip_rect),
                       qoir_rectangle__height(src_clip_rect));
     }
@@ -1865,13 +1896,35 @@ qoir_decode(                          //
     const size_t src_len,             //
     const qoir_decode_options* options) {
   qoir_decode_result result = {0};
+  qoir_rectangle dst_clip_rectangle =
+      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
+  qoir_rectangle src_clip_rectangle =
+      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
+  int32_t offset_x = 0;
+  int32_t offset_y = 0;
   if (options) {
-    if ((((int32_t)options->pixbuf.pixcfg.width_in_pixels) < 0) ||
-        (((int32_t)options->pixbuf.pixcfg.height_in_pixels) < 0)) {
+    if ((options->pixbuf.pixcfg.width_in_pixels > 0xFFFFFF) ||
+        (options->pixbuf.pixcfg.height_in_pixels > 0xFFFFFF)) {
       return qoir_private_make_decode_result_error(
           qoir_status_message__error_unsupported_pixbuf_dimensions);
     }
     memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
+    if (options->use_dst_clip_rectangle) {
+      memcpy(&dst_clip_rectangle, &options->dst_clip_rectangle,
+             sizeof(options->dst_clip_rectangle));
+    }
+    if (options->use_src_clip_rectangle) {
+      memcpy(&src_clip_rectangle, &options->src_clip_rectangle,
+             sizeof(options->src_clip_rectangle));
+    }
+    if ((-0xFFFFFF <= options->offset_x) && (options->offset_x <= 0xFFFFFF) &&
+        (-0xFFFFFF <= options->offset_y) && (options->offset_y <= 0xFFFFFF)) {
+      offset_x = options->offset_x;
+      offset_y = options->offset_y;
+    } else {
+      dst_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
+      src_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
+    }
   }
 
   if ((src_len < 44) ||
@@ -1957,6 +2010,10 @@ qoir_decode(                          //
             return qoir_private_make_decode_result_error(
                 qoir_status_message__error_out_of_memory);
           }
+          if (options && (options->use_dst_clip_rectangle ||
+                          options->use_src_clip_rectangle)) {
+            memset(result.owned_memory, 0, pixbuf_len);
+          }
           result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
           result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
           result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
@@ -1975,9 +2032,10 @@ qoir_decode(                          //
           free_decbuf = true;
         }
         const char* status_message = qoir_private_decode_qpix_payload(
-            decbuf, result.dst_pixbuf, src_pixfmt, width_in_pixels,
-            height_in_pixels, sp, payload_len + 8,  // See § for +8.
-            lossiness);
+            decbuf, result.dst_pixbuf, dst_clip_rectangle, src_pixfmt,
+            width_in_pixels, height_in_pixels, sp,
+            payload_len + 8,  // See § for +8.
+            src_clip_rectangle, offset_x, offset_y, lossiness);
         if (free_decbuf) {
           QOIR_FREE(decbuf);
         }
