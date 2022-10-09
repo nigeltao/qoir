@@ -155,6 +155,15 @@ typedef struct qoir_pixel_buffer_struct {
   size_t stride_in_bytes;
 } qoir_pixel_buffer;
 
+// All int32_t points (x, y) such that ((x0 <= x) && (x < x1) && (y0 <= y) &&
+// (y < y1)). The low bounds are inclusive. The high bounds are exclusive.
+typedef struct qoir_rectangle_struct {
+  int32_t x0;
+  int32_t y0;
+  int32_t x1;
+  int32_t y1;
+} qoir_rectangle;
+
 static inline uint32_t  //
 qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
   return (pixfmt & 0x10) ? 3 : 4;
@@ -167,6 +176,50 @@ qoir_pixel_buffer__is_zero(qoir_pixel_buffer pixbuf) {
          (pixbuf.pixcfg.height_in_pixels == 0) &&  //
          (pixbuf.data == NULL) &&                  //
          (pixbuf.stride_in_bytes == 0);
+}
+
+static inline qoir_rectangle  //
+qoir_make_rectangle(          //
+    int32_t x0,               //
+    int32_t y0,               //
+    int32_t x1,               //
+    int32_t y1) {
+  qoir_rectangle ret;
+  ret.x0 = x0;
+  ret.y0 = y0;
+  ret.x1 = x1;
+  ret.y1 = y1;
+  return ret;
+}
+
+static inline qoir_rectangle  //
+qoir_rectangle__intersect(    //
+    qoir_rectangle r,         //
+    qoir_rectangle s) {
+  qoir_rectangle ret;
+  ret.x0 = (r.x0 > s.x0) ? r.x0 : s.x0;
+  ret.y0 = (r.y0 > s.y0) ? r.y0 : s.y0;
+  ret.x1 = (r.x1 < s.x1) ? r.x1 : s.x1;
+  ret.y1 = (r.y1 < s.y1) ? r.y1 : s.y1;
+  return ret;
+}
+
+static inline bool         //
+qoir_rectangle__is_empty(  //
+    qoir_rectangle r) {
+  return (r.x1 <= r.x0) || (r.y1 <= r.y0);
+}
+
+static inline uint32_t  //
+qoir_rectangle__width(  //
+    qoir_rectangle r) {
+  return (r.x1 > r.x0) ? ((uint32_t)r.x1 - (uint32_t)r.x0) : 0;
+}
+
+static inline uint32_t   //
+qoir_rectangle__height(  //
+    qoir_rectangle r) {
+  return (r.y1 > r.y0) ? ((uint32_t)r.y1 - (uint32_t)r.y0) : 0;
 }
 
 // -------- Tiling
@@ -1652,6 +1705,10 @@ qoir_private_decode_qpix_payload(   //
     const uint8_t* src_ptr,         //
     size_t src_len,                 //
     uint32_t lossiness) {
+  qoir_rectangle dst_rect =
+      qoir_make_rectangle(0, 0, (int32_t)dst_pixbuf.pixcfg.width_in_pixels,
+                          (int32_t)dst_pixbuf.pixcfg.height_in_pixels);
+
   size_t height_in_tiles =
       qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
   size_t width_in_tiles =
@@ -1685,6 +1742,10 @@ qoir_private_decode_qpix_payload(   //
     for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
       size_t tw = qoir_private_tile_dimension(tx < tx1, src_width_in_pixels);
       size_t th = qoir_private_tile_dimension(ty < ty1, src_height_in_pixels);
+      qoir_rectangle src_clip_rect =
+          qoir_make_rectangle((int32_t)(tx + 0), (int32_t)(ty + 0),
+                              (int32_t)(tx + tw), (int32_t)(ty + th));
+      src_clip_rect = qoir_rectangle__intersect(src_clip_rect, dst_rect);
 
       if (src_len < 4) {
         return qoir_status_message__error_invalid_data;
@@ -1696,6 +1757,12 @@ qoir_private_decode_qpix_payload(   //
       if ((src_len < (tile_len + 8)) ||  //
           (((4 * QOIR_TS2) < tile_len) && ((prefix >> 31) != 0))) {
         return qoir_status_message__error_invalid_data;
+      }
+
+      if (qoir_rectangle__is_empty(src_clip_rect)) {
+        src_ptr += tile_len;
+        src_len -= tile_len;
+        continue;
       }
 
       const uint8_t* literals = NULL;
@@ -1771,7 +1838,9 @@ qoir_private_decode_qpix_payload(   //
 
       uint8_t* dp = dst_pixbuf.data + (dst_pixbuf.stride_in_bytes * ty) +
                     (num_dst_channels * tx);
-      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, literals, 4 * tw, tw, th);
+      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, literals, 4 * tw,
+                      qoir_rectangle__width(src_clip_rect),
+                      qoir_rectangle__height(src_clip_rect));
     }
   }
 
@@ -1797,6 +1866,11 @@ qoir_decode(                          //
     const qoir_decode_options* options) {
   qoir_decode_result result = {0};
   if (options) {
+    if ((((int32_t)options->pixbuf.pixcfg.width_in_pixels) < 0) ||
+        (((int32_t)options->pixbuf.pixcfg.height_in_pixels) < 0)) {
+      return qoir_private_make_decode_result_error(
+          qoir_status_message__error_unsupported_pixbuf_dimensions);
+    }
     memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
   }
 
@@ -1888,12 +1962,6 @@ qoir_decode(                          //
           result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
           result.dst_pixbuf.data = result.owned_memory;
           result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
-        } else if ((result.dst_pixbuf.pixcfg.width_in_pixels <
-                    width_in_pixels) ||
-                   (result.dst_pixbuf.pixcfg.height_in_pixels <
-                    height_in_pixels)) {
-          return qoir_private_make_decode_result_error(
-              "TODO: crop source image");
         }
         qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
         bool free_decbuf = false;
