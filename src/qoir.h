@@ -160,6 +160,15 @@ qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
   return (pixfmt & 0x10) ? 3 : 4;
 }
 
+static inline bool  //
+qoir_pixel_buffer__is_zero(qoir_pixel_buffer pixbuf) {
+  return (pixbuf.pixcfg.pixfmt == 0) &&            //
+         (pixbuf.pixcfg.width_in_pixels == 0) &&   //
+         (pixbuf.pixcfg.height_in_pixels == 0) &&  //
+         (pixbuf.data == NULL) &&                  //
+         (pixbuf.stride_in_bytes == 0);
+}
+
 // -------- Tiling
 
 #define QOIR_TILE_MASK 0x3F
@@ -291,10 +300,32 @@ typedef struct qoir_decode_options_struct {
   void (*contextual_free_func)(void* memory_func_context, void* ptr);
   void* memory_func_context;
 
+  // Pre-allocated 'scratch space' used during decoding. Its contents need not
+  // be initialized when passed to qoir_decode.
+  //
+  // If NULL, the 'scratch space' will be dynamically allocated and freed.
   qoir_decode_buffer* decbuf;
+
+  // Pre-allocated pixel buffer to decode into.
+  //
+  // If zero, it will be dynamically allocated and memory ownership (i.e. the
+  // responsibility to call free or equivalent) will be returned as the
+  // qoir_decode_result owned_memory field.
+  qoir_pixel_buffer pixbuf;
+
+  // If non-zero, this is the pixel format to use when dynamically allocating
+  // the pixel buffer to decode into (if the pixbuf field is zero). This pixfmt
+  // field has no effect if the pixbuf field is non-zero.
+  //
+  // A zero-valued pixfmt field is equivalent to the default pixel format:
+  // QOIR_PIXEL_FORMAT__RGBA_NONPREMUL.
   qoir_pixel_format pixfmt;
 } qoir_decode_options;
 
+// Decodes a pixel buffer from the QOIR format.
+//
+// A NULL options is valid and is equivalent to a non-NULL pointer to a
+// zero-valued struct (where all fields are zero / NULL / false).
 QOIR_MAYBE_STATIC qoir_decode_result  //
 qoir_decode(                          //
     const uint8_t* src_ptr,           //
@@ -330,6 +361,10 @@ typedef struct qoir_encode_options_struct {
   void (*contextual_free_func)(void* memory_func_context, void* ptr);
   void* memory_func_context;
 
+  // Pre-allocated 'scratch space' used during encoding. Its contents need not
+  // be initialized when passed to qoir_encode.
+  //
+  // If NULL, the 'scratch space' will be dynamically allocated and freed.
   qoir_encode_buffer* encbuf;
 
   // Optional metadata chunks.
@@ -358,6 +393,10 @@ typedef struct qoir_encode_options_struct {
   bool dither;
 } qoir_encode_options;
 
+// Encodes a pixel buffer to the QOIR format.
+//
+// A NULL options is valid and is equivalent to a non-NULL pointer to a
+// zero-valued struct (where all fields are zero / NULL / false).
 QOIR_MAYBE_STATIC qoir_encode_result      //
 qoir_encode(                              //
     const qoir_pixel_buffer* src_pixbuf,  //
@@ -1606,19 +1645,17 @@ qoir_private_decode_tile_opcodes(  //
 static const char*                  //
 qoir_private_decode_qpix_payload(   //
     qoir_decode_buffer* decbuf,     //
-    qoir_pixel_format dst_pixfmt,   //
-    uint32_t dst_width_in_pixels,   //
-    uint32_t dst_height_in_pixels,  //
-    uint8_t* dst_data,              //
-    size_t dst_stride_in_bytes,     //
+    qoir_pixel_buffer dst_pixbuf,   //
     qoir_pixel_format src_pixfmt,   //
+    uint32_t src_width_in_pixels,   //
+    uint32_t src_height_in_pixels,  //
     const uint8_t* src_ptr,         //
     size_t src_len,                 //
     uint32_t lossiness) {
   size_t height_in_tiles =
-      qoir_calculate_number_of_tiles_1d(dst_height_in_pixels);
+      qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
   size_t width_in_tiles =
-      qoir_calculate_number_of_tiles_1d(dst_width_in_pixels);
+      qoir_calculate_number_of_tiles_1d(src_width_in_pixels);
   if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
     goto done;
   }
@@ -1626,11 +1663,13 @@ qoir_private_decode_qpix_payload(   //
   size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
   qoir_private_swizzle_func swizzle_func =
-      qoir_private_choose_decode_swizzle_func(dst_pixfmt, src_pixfmt);
+      qoir_private_choose_decode_swizzle_func(dst_pixbuf.pixcfg.pixfmt,
+                                              src_pixfmt);
   if (!swizzle_func) {
     return qoir_status_message__error_unsupported_pixfmt;
   }
-  size_t num_dst_channels = qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+  size_t num_dst_channels =
+      qoir_pixel_format__bytes_per_pixel(dst_pixbuf.pixcfg.pixfmt);
 
   uint8_t* literals_pre_padding = decbuf->private_impl.literals;
   for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
@@ -1644,8 +1683,8 @@ qoir_private_decode_qpix_payload(   //
   // measured in pixels.
   for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
     for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
-      size_t tw = qoir_private_tile_dimension(tx < tx1, dst_width_in_pixels);
-      size_t th = qoir_private_tile_dimension(ty < ty1, dst_height_in_pixels);
+      size_t tw = qoir_private_tile_dimension(tx < tx1, src_width_in_pixels);
+      size_t th = qoir_private_tile_dimension(ty < ty1, src_height_in_pixels);
 
       if (src_len < 4) {
         return qoir_status_message__error_invalid_data;
@@ -1730,9 +1769,9 @@ qoir_private_decode_qpix_payload(   //
         literals = decbuf->private_impl.opcodes;
       }
 
-      uint8_t* dp =
-          dst_data + (dst_stride_in_bytes * ty) + (num_dst_channels * tx);
-      (*swizzle_func)(dp, dst_stride_in_bytes, literals, 4 * tw, tw, th);
+      uint8_t* dp = dst_pixbuf.data + (dst_pixbuf.stride_in_bytes * ty) +
+                    (num_dst_channels * tx);
+      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, literals, 4 * tw, tw, th);
     }
   }
 
@@ -1743,26 +1782,36 @@ done:
   return NULL;
 }
 
+static qoir_decode_result               //
+qoir_private_make_decode_result_error(  //
+    const char* status_message) {
+  qoir_decode_result result = {0};
+  result.status_message = status_message;
+  return result;
+}
+
 QOIR_MAYBE_STATIC qoir_decode_result  //
 qoir_decode(                          //
     const uint8_t* src_ptr,           //
     const size_t src_len,             //
     const qoir_decode_options* options) {
   qoir_decode_result result = {0};
-  qoir_decode_result pending_result = {0};
+  if (options) {
+    memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
+  }
+
   if ((src_len < 44) ||
       (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
-    result.status_message = qoir_status_message__error_invalid_data;
-    return result;
+    return qoir_private_make_decode_result_error(
+        qoir_status_message__error_invalid_data);
   }
   uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
   if ((qoir_chunk_payload_len < 8) ||
       (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
       (qoir_chunk_payload_len > (src_len - 44))) {
-    result.status_message = qoir_status_message__error_invalid_data;
-    return result;
+    return qoir_private_make_decode_result_error(
+        qoir_status_message__error_invalid_data);
   }
-  uint8_t* pixbuf_data = NULL;
 
   uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
   uint32_t width_in_pixels = 0xFFFFFF & header0;
@@ -1779,9 +1828,11 @@ qoir_decode(                          //
   uint32_t height_in_pixels = 0xFFFFFF & header1;
   uint32_t lossiness = 0x07 & (header1 >> 24);
 
-  qoir_pixel_format dst_pixfmt = (options && options->pixfmt)
-                                     ? options->pixfmt
-                                     : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL;
+  qoir_pixel_format dst_pixfmt =
+      (options && !qoir_pixel_buffer__is_zero(options->pixbuf))
+          ? options->pixbuf.pixcfg.pixfmt
+          : ((options && options->pixfmt) ? options->pixfmt
+                                          : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL);
   uint64_t dst_width_in_bytes =
       width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
 
@@ -1822,39 +1873,49 @@ qoir_decode(                          //
 
       uint64_t pixbuf_len = dst_width_in_bytes * (uint64_t)height_in_pixels;
       if (pixbuf_len > SIZE_MAX) {
-        result.status_message =
-            qoir_status_message__error_unsupported_pixbuf_dimensions;
-        return result;
+        return qoir_private_make_decode_result_error(
+            qoir_status_message__error_unsupported_pixbuf_dimensions);
 
       } else if (pixbuf_len > 0) {
-        pixbuf_data = QOIR_MALLOC((size_t)pixbuf_len);
-        if (!pixbuf_data) {
-          result.status_message = qoir_status_message__error_out_of_memory;
-          return result;
+        if (qoir_pixel_buffer__is_zero(result.dst_pixbuf)) {
+          result.owned_memory = QOIR_MALLOC((size_t)pixbuf_len);
+          if (!result.owned_memory) {
+            return qoir_private_make_decode_result_error(
+                qoir_status_message__error_out_of_memory);
+          }
+          result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
+          result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
+          result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
+          result.dst_pixbuf.data = result.owned_memory;
+          result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
+        } else if ((result.dst_pixbuf.pixcfg.width_in_pixels <
+                    width_in_pixels) ||
+                   (result.dst_pixbuf.pixcfg.height_in_pixels <
+                    height_in_pixels)) {
+          return qoir_private_make_decode_result_error(
+              "TODO: crop source image");
         }
         qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
         bool free_decbuf = false;
         if (!decbuf) {
           decbuf = (qoir_decode_buffer*)QOIR_MALLOC(sizeof(qoir_decode_buffer));
           if (!decbuf) {
-            result.status_message = qoir_status_message__error_out_of_memory;
-            QOIR_FREE(pixbuf_data);
-            return result;
+            QOIR_FREE(result.owned_memory);
+            return qoir_private_make_decode_result_error(
+                qoir_status_message__error_out_of_memory);
           }
           free_decbuf = true;
         }
         const char* status_message = qoir_private_decode_qpix_payload(
-            decbuf, dst_pixfmt, width_in_pixels, height_in_pixels, pixbuf_data,
-            dst_width_in_bytes, src_pixfmt, sp,
-            payload_len + 8,  // See § for +8.
+            decbuf, result.dst_pixbuf, src_pixfmt, width_in_pixels,
+            height_in_pixels, sp, payload_len + 8,  // See § for +8.
             lossiness);
         if (free_decbuf) {
           QOIR_FREE(decbuf);
         }
         if (status_message) {
-          result.status_message = status_message;
-          QOIR_FREE(pixbuf_data);
-          return result;
+          QOIR_FREE(result.owned_memory);
+          return qoir_private_make_decode_result_error(status_message);
         }
 
       } else if (payload_len != 0) {
@@ -1862,25 +1923,25 @@ qoir_decode(                          //
       }
 
     } else if (chunk_type == 0x50434349) {  // "ICCP"le.
-      if (pending_result.metadata_iccp_ptr) {
+      if (result.metadata_iccp_ptr) {
         goto fail_invalid_data;
       }
-      pending_result.metadata_iccp_ptr = sp;
-      pending_result.metadata_iccp_len = payload_len;
+      result.metadata_iccp_ptr = sp;
+      result.metadata_iccp_len = payload_len;
 
     } else if (chunk_type == 0x46495845) {  // "EXIF"le.
-      if (pending_result.metadata_exif_ptr) {
+      if (result.metadata_exif_ptr) {
         goto fail_invalid_data;
       }
-      pending_result.metadata_exif_ptr = sp;
-      pending_result.metadata_exif_len = payload_len;
+      result.metadata_exif_ptr = sp;
+      result.metadata_exif_len = payload_len;
 
     } else if (chunk_type == 0x20504D58) {  // "XMP "le.
-      if (pending_result.metadata_xmp_ptr) {
+      if (result.metadata_xmp_ptr) {
         goto fail_invalid_data;
       }
-      pending_result.metadata_xmp_ptr = sp;
-      pending_result.metadata_xmp_len = payload_len;
+      result.metadata_xmp_ptr = sp;
+      result.metadata_xmp_len = payload_len;
     }
 
     sp += payload_len;
@@ -1890,25 +1951,12 @@ qoir_decode(                          //
   if (!seen_qpix) {
     goto fail_invalid_data;
   }
-
-  result.owned_memory = pixbuf_data;
-  result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
-  result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
-  result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
-  result.dst_pixbuf.data = pixbuf_data;
-  result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
-  result.metadata_iccp_ptr = pending_result.metadata_iccp_ptr;
-  result.metadata_iccp_len = pending_result.metadata_iccp_len;
-  result.metadata_exif_ptr = pending_result.metadata_exif_ptr;
-  result.metadata_exif_len = pending_result.metadata_exif_len;
-  result.metadata_xmp_ptr = pending_result.metadata_xmp_ptr;
-  result.metadata_xmp_len = pending_result.metadata_xmp_len;
   return result;
 
 fail_invalid_data:
-  result.status_message = qoir_status_message__error_invalid_data;
-  QOIR_FREE(pixbuf_data);
-  return result;
+  QOIR_FREE(result.owned_memory);
+  return qoir_private_make_decode_result_error(
+      qoir_status_message__error_invalid_data);
 }
 
 // -------- QOIR Encode
