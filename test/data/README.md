@@ -1,3 +1,8 @@
+`at-mouquins.*` is a photo of "At Mouquin's" by William Glackens, held by the
+Art Institute of Chicago.
+[www.artic.edu](https://www.artic.edu/artworks/15401/at-mouquin-s) lists that
+image as in the public domain.
+
 `bricks-color.*` is an original photo by Nigel Tao
 <nigeltao@golang.org>.
 
