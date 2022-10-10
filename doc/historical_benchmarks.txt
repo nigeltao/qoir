@@ -27,7 +27,14 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  161.40 gccEnc  271.96 gccDec  142.45 claEnc  171.02 claDec  Add metadata (ICCP, EXIF, XMP) support
+PENDING  0.2526 CR  167.52 gccEnc  272.21 gccDec  143.01 claEnc  175.73 claDec  Add cmd/qoirview --multithreaded option
+af456ac  0.2526 CR  168.15 gccEnc  272.06 gccDec  142.85 claEnc  175.81 claDec  Add more test/data images
+36876fb  0.2526 CR  167.36 gccEnc  272.01 gccDec  142.47 claEnc  175.58 claDec  Add qoir_decode_options clip and offset fields
+33d06eb  0.2526 CR  161.37 gccEnc  271.87 gccDec  146.15 claEnc  165.56 claDec  Crop to qoir_decode_options.pixbuf dimensions
+d273370  0.2526 CR  161.39 gccEnc  271.79 gccDec  142.67 claEnc  171.27 claDec  Add a qoir_decode_options.pixbuf field
+48bcc50  0.2526 CR  161.04 gccEnc  272.52 gccDec  142.89 claEnc  171.21 claDec  Apply unlossify before (not after) swizzle
+9defe8f  0.2526 CR  160.64 gccEnc  271.52 gccDec  142.24 claEnc  175.26 claDec  Fix unlossify for 3 bytes per pixel formats
+224cd54  0.2526 CR  161.40 gccEnc  271.96 gccDec  142.45 claEnc  171.02 claDec  Add metadata (ICCP, EXIF, XMP) support
 2ba31e2  0.2526 CR  161.04 gccEnc  271.99 gccDec  146.03 claEnc  164.93 claDec  Have gammaawaredither use multiply not divide
 1d31c28  0.2526 CR  160.66 gccEnc  271.56 gccDec  146.06 claEnc  164.79 claDec  Add dither encoding option
 72a8d47  0.2526 CR  161.37 gccEnc  271.94 gccDec  145.81 claEnc  165.64 claDec  Have gammaawaredither preserve ancillary chunks

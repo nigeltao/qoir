@@ -22,6 +22,144 @@
 
 // ----
 
+bool g_multithreaded = false;
+bool g_print_decode_time = false;
+
+// ----
+
+typedef struct worker_data_struct {
+  // Request.
+  const uint8_t* src_ptr;
+  size_t src_len;
+  qoir_decode_options* options;
+  int32_t y0;
+  int32_t y1;
+
+  // Response.
+  const char* status_message;
+} worker_data;
+
+int  //
+work(void* data) {
+  worker_data* wd = (worker_data*)data;
+  qoir_decode_options opts = {0};
+  memcpy(&opts, wd->options, sizeof(*wd->options));
+  if (!opts.pixbuf.data) {
+    wd->status_message =
+        "main: inconsistent qoir_decode_options.pixbuf.data field\n";
+    return 0;
+  }
+  if (opts.src_clip_rectangle.y0 < wd->y0) {
+    opts.src_clip_rectangle.y0 = wd->y0;
+  }
+  if (opts.src_clip_rectangle.y1 > wd->y1) {
+    opts.src_clip_rectangle.y1 = wd->y1;
+  }
+
+  qoir_decode_result res = qoir_decode(wd->src_ptr, wd->src_len, &opts);
+  if (res.owned_memory) {
+    free(res.owned_memory);
+    wd->status_message =
+        "main: inconsistent qoir_decode_result.owned_memory field\n";
+  } else {
+    wd->status_message = res.status_message;
+  }
+  return 0;
+}
+
+qoir_decode_result           //
+multithreaded_decode(        //
+    const uint8_t* src_ptr,  //
+    const size_t src_len,    //
+    const qoir_decode_options* options) {
+  qoir_decode_pixel_configuration_result config =
+      qoir_decode_pixel_configuration(src_ptr, src_len);
+  if (config.status_message) {
+    qoir_decode_result res = {0};
+    res.status_message = config.status_message;
+    return res;
+  }
+
+  uint32_t height_in_tiles =
+      qoir_calculate_number_of_tiles_1d(config.dst_pixcfg.height_in_pixels);
+  if (height_in_tiles <= 1) {
+    return qoir_decode(src_ptr, src_len, options);
+  }
+
+  uint64_t pixbuf_len = 4 * (uint64_t)config.dst_pixcfg.width_in_pixels *
+                        (uint64_t)config.dst_pixcfg.height_in_pixels;
+  if (pixbuf_len > SIZE_MAX) {
+    qoir_decode_result res = {0};
+    res.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    return res;
+  }
+
+  qoir_decode_options opts = {0};
+  if (options) {
+    memcpy(&opts, options, sizeof(*options));
+  }
+
+  opts.pixbuf.pixcfg.pixfmt = QOIR_PIXEL_FORMAT__BGRA_PREMUL;
+  opts.pixbuf.pixcfg.width_in_pixels = config.dst_pixcfg.width_in_pixels;
+  opts.pixbuf.pixcfg.height_in_pixels = config.dst_pixcfg.height_in_pixels;
+  opts.pixbuf.data = malloc(pixbuf_len);
+  opts.pixbuf.stride_in_bytes = 4 * opts.pixbuf.pixcfg.width_in_pixels;
+  if (!opts.pixbuf.data) {
+    qoir_decode_result res = {0};
+    res.status_message = qoir_status_message__error_out_of_memory;
+    return res;
+  }
+
+  if (!opts.use_src_clip_rectangle) {
+    opts.use_src_clip_rectangle = true;
+    opts.src_clip_rectangle =
+        qoir_make_rectangle(0, 0, (int32_t)config.dst_pixcfg.width_in_pixels,
+                            (int32_t)config.dst_pixcfg.height_in_pixels);
+  }
+
+  const char* status_message = NULL;
+  uint32_t num_threads = height_in_tiles;
+  if (num_threads > 16) {
+    num_threads = 16;
+  }
+  worker_data data[16] = {0};
+  SDL_Thread* threads[16] = {0};
+
+  for (uint32_t i = 0; i < num_threads; i++) {
+    data[i].src_ptr = src_ptr;
+    data[i].src_len = src_len;
+    data[i].options = &opts;
+    data[i].y0 = (((i + 0) * height_in_tiles) / num_threads) * QOIR_TILE_SIZE;
+    data[i].y1 = (((i + 1) * height_in_tiles) / num_threads) * QOIR_TILE_SIZE;
+    threads[i] = SDL_CreateThread(&work, "worker", &data[i]);
+    if (!threads[i]) {
+      status_message = "main: could not create thread";
+    }
+  }
+
+  for (uint32_t i = 0; i < num_threads; i++) {
+    if (threads[i]) {
+      SDL_WaitThread(threads[i], NULL);
+      if (!status_message) {
+        status_message = data[i].status_message;
+      }
+    }
+  }
+  if (status_message) {
+    free(opts.pixbuf.data);
+    qoir_decode_result res = {0};
+    res.status_message = status_message;
+    return res;
+  }
+  qoir_decode_result res = {0};
+  res.owned_memory = opts.pixbuf.data;
+  memcpy(&res.dst_pixbuf, &opts.pixbuf, sizeof(opts.pixbuf));
+  return res;
+}
+
+// ----
+
 SDL_Surface*  //
 load(const char* filename, void** owned_memory) {
   SDL_RWops* rw = SDL_RWFromFile(filename, "rb");
@@ -60,9 +198,12 @@ load(const char* filename, void** owned_memory) {
     return NULL;
   }
 
+  uint64_t now = SDL_GetPerformanceCounter();
   qoir_decode_options opts = {0};
   opts.pixfmt = QOIR_PIXEL_FORMAT__BGRA_PREMUL;
-  qoir_decode_result decode = qoir_decode(ptr, len, &opts);
+  qoir_decode_result decode = g_multithreaded
+                                  ? multithreaded_decode(ptr, len, &opts)
+                                  : qoir_decode(ptr, len, &opts);
   free(ptr);
   ptr = NULL;
   len = 0;
@@ -71,6 +212,11 @@ load(const char* filename, void** owned_memory) {
     fprintf(stderr, "main: load: could not decode file: %s\n",
             decode.status_message);
     return NULL;
+  }
+  if (g_print_decode_time) {
+    uint64_t elapsed = SDL_GetPerformanceCounter() - now;
+    printf("%" PRIu64 " microseconds to decode.\n",
+           (elapsed * 1000000) / SDL_GetPerformanceFrequency());
   }
 
   *owned_memory = decode.owned_memory;
@@ -116,8 +262,29 @@ draw(SDL_Window* window, SDL_Surface* surface) {
 
 int  //
 main(int argc, char** argv) {
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s filename\n", argv[0]);
+  const char* filename = NULL;
+  bool too_many_args = false;
+  for (int i = 1; i < argc; i++) {
+    const char* arg = argv[i];
+    if ((arg[0] == '-') && (arg[1] == '-')) {
+      arg++;
+    }
+    if (strcmp(arg, "-multithreaded") == 0) {
+      g_multithreaded = true;
+      continue;
+    } else if (strcmp(arg, "-print-decode-time") == 0) {
+      g_print_decode_time = true;
+      continue;
+    } else if (filename == NULL) {
+      filename = argv[i];
+      continue;
+    }
+    too_many_args = true;
+  }
+
+  if (too_many_args || (filename == NULL)) {
+    fprintf(stderr, "usage: %s -print-decode-time -multithreaded filename\n",
+            argv[0]);
     return 1;
   }
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -132,7 +299,7 @@ main(int argc, char** argv) {
     return 1;
   }
   void* surface_owned_memory = NULL;
-  SDL_Surface* surface = load(argv[1], &surface_owned_memory);
+  SDL_Surface* surface = load(filename, &surface_owned_memory);
   if (!surface) {
     return 1;
   }
