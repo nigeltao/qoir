@@ -335,6 +335,9 @@ typedef struct qoir_decode_result_struct {
 
   // Optional metadata chunks.
 
+  const uint8_t* metadata_cicp_ptr;
+  size_t metadata_cicp_len;
+
   const uint8_t* metadata_iccp_ptr;
   size_t metadata_iccp_len;
 
@@ -434,6 +437,9 @@ typedef struct qoir_encode_options_struct {
   qoir_encode_buffer* encbuf;
 
   // Optional metadata chunks.
+
+  const uint8_t* metadata_cicp_ptr;
+  size_t metadata_cicp_len;
 
   const uint8_t* metadata_iccp_ptr;
   size_t metadata_iccp_len;
@@ -2048,6 +2054,13 @@ qoir_decode(                          //
         goto fail_invalid_data;
       }
 
+    } else if (chunk_type == 0x50434943) {  // "CICP"le.
+      if (result.metadata_cicp_ptr) {
+        goto fail_invalid_data;
+      }
+      result.metadata_cicp_ptr = sp;
+      result.metadata_cicp_len = payload_len;
+
     } else if (chunk_type == 0x50434349) {  // "ICCP"le.
       if (result.metadata_iccp_ptr) {
         goto fail_invalid_data;
@@ -2543,6 +2556,12 @@ qoir_encode(                              //
                          // bytes when LZ4 compressing each tile.
   if (options) {
     bool overflow = false;
+    if (options->metadata_cicp_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_cicp_len);
+    }
     if (options->metadata_iccp_len) {
       overflow = overflow ||
                  qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
@@ -2594,6 +2613,15 @@ qoir_encode(                              //
   dst_ptr[15] = dst_pixfmt;
   dst_ptr[19] = lossiness;
   dst_ptr += 20;
+
+  // CICP chunk.
+  if (options && options->metadata_cicp_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x50434943);  // "CICP"le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_cicp_len);
+    memcpy(dst_ptr + 12, options->metadata_cicp_ptr,
+           options->metadata_cicp_len);
+    dst_ptr += 12 + options->metadata_cicp_len;
+  }
 
   // ICCP chunk.
   if (options && options->metadata_iccp_len) {
