@@ -30,21 +30,28 @@
 
 // ----
 
-const char*  //
-my_enter_callback(void* context, uint32_t depth, const char* dirname) {
+const char*          //
+my_enter_callback(   //
+    void* context,   //
+    uint32_t depth,  //
+    const char* dirname) {
   return NULL;
 }
 
-const char*  //
-my_exit_callback(void* context, uint32_t depth, const char* dirname) {
+const char*          //
+my_exit_callback(    //
+    void* context,   //
+    uint32_t depth,  //
+    const char* dirname) {
   return NULL;
 }
 
-const char*  //
-my_file_callback(void* context,
-                 uint32_t depth,
-                 const char* dirname,
-                 const char* filename) {
+const char*               //
+my_file_callback(         //
+    void* context,        //
+    uint32_t depth,       //
+    const char* dirname,  //
+    const char* filename) {
   const char* testname = (const char*)context;
   size_t n = strlen(filename);
   if ((n < 4) || strcmp(filename + n - 4, ".png")) {
@@ -63,8 +70,9 @@ my_file_callback(void* context,
   return result;
 }
 
-int  //
-check(char* arg) {
+int     //
+check(  //
+    char* arg) {
   const char* status_message = NULL;
 
   DIR* d = opendir(arg);
@@ -90,8 +98,10 @@ check(char* arg) {
 
 // ----
 
-int  //
-main(int argc, char** argv) {
+int            //
+main(          //
+    int argc,  //
+    char** argv) {
   for (int i = 1; i < argc; i++) {
     int result = check(argv[i]);
     if (result) {

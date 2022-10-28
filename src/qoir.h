@@ -164,13 +164,15 @@ typedef struct qoir_rectangle_struct {
   int32_t y1;
 } qoir_rectangle;
 
-static inline uint32_t  //
-qoir_pixel_format__bytes_per_pixel(qoir_pixel_format pixfmt) {
+static inline uint32_t               //
+qoir_pixel_format__bytes_per_pixel(  //
+    qoir_pixel_format pixfmt) {
   return (pixfmt & 0x10) ? 3 : 4;
 }
 
-static inline bool  //
-qoir_pixel_buffer__is_zero(qoir_pixel_buffer pixbuf) {
+static inline bool           //
+qoir_pixel_buffer__is_zero(  //
+    qoir_pixel_buffer pixbuf) {
   return (pixbuf.pixcfg.pixfmt == 0) &&            //
          (pixbuf.pixcfg.width_in_pixels == 0) &&   //
          (pixbuf.pixcfg.height_in_pixels == 0) &&  //
@@ -235,15 +237,17 @@ qoir_rectangle__height(  //
 // QOIR_TS2 is the maximum (inclusive) number of pixels in a tile.
 #define QOIR_TS2 (QOIR_TILE_SIZE * QOIR_TILE_SIZE)
 
-static inline uint32_t  //
-qoir_calculate_number_of_tiles_1d(uint32_t number_of_pixels) {
+static inline uint32_t              //
+qoir_calculate_number_of_tiles_1d(  //
+    uint32_t number_of_pixels) {
   uint64_t rounded_up = (uint64_t)number_of_pixels + QOIR_TILE_MASK;
   return (uint32_t)(rounded_up >> QOIR_TILE_SHIFT);
 }
 
-static inline uint64_t  //
-qoir_calculate_number_of_tiles_2d(uint32_t width_in_pixels,
-                                  uint32_t height_in_pixels) {
+static inline uint64_t              //
+qoir_calculate_number_of_tiles_2d(  //
+    uint32_t width_in_pixels,
+    uint32_t height_in_pixels) {
   uint64_t w = ((uint64_t)width_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
   uint64_t h = ((uint64_t)height_in_pixels + QOIR_TILE_MASK) >> QOIR_TILE_SHIFT;
   return w * h;
@@ -526,8 +530,9 @@ qoir_encode(                              //
 #define QOIR_USE_MEMCPY_LE_PEEK_POKE
 #endif
 
-static inline uint32_t  //
-qoir_private_peek_u32le(const uint8_t* p) {
+static inline uint32_t    //
+qoir_private_peek_u32le(  //
+    const uint8_t* p) {
 #if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
   uint32_t x;
   memcpy(&x, p, 4);
@@ -538,8 +543,9 @@ qoir_private_peek_u32le(const uint8_t* p) {
 #endif
 }
 
-static inline uint64_t  //
-qoir_private_peek_u64le(const uint8_t* p) {
+static inline uint64_t    //
+qoir_private_peek_u64le(  //
+    const uint8_t* p) {
 #if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
   uint64_t x;
   memcpy(&x, p, 8);
@@ -552,8 +558,10 @@ qoir_private_peek_u64le(const uint8_t* p) {
 #endif
 }
 
-static inline void  //
-qoir_private_poke_u32le(uint8_t* p, uint32_t x) {
+static inline void        //
+qoir_private_poke_u32le(  //
+    uint8_t* p,           //
+    uint32_t x) {
 #if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
   memcpy(p, &x, 4);
 #else
@@ -564,8 +572,10 @@ qoir_private_poke_u32le(uint8_t* p, uint32_t x) {
 #endif
 }
 
-static inline void  //
-qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
+static inline void        //
+qoir_private_poke_u64le(  //
+    uint8_t* p,           //
+    uint64_t x) {
 #if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
   memcpy(p, &x, 8);
 #else
@@ -580,8 +590,10 @@ qoir_private_poke_u64le(uint8_t* p, uint64_t x) {
 #endif
 }
 
-static inline bool  //
-qoir_private_u64_overflow_add(uint64_t* x, uint64_t y) {
+static inline bool              //
+qoir_private_u64_overflow_add(  //
+    uint64_t* x,                //
+    uint64_t y) {
   uint64_t old = *x;
   *x += y;
   return *x < old;
@@ -593,8 +605,10 @@ static uint8_t qoir_private_table_unlossify[7][256];
 static uint8_t qoir_private_table_luma[65536];
 #endif
 
-static inline uint32_t  //
-qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
+static inline uint32_t        //
+qoir_private_tile_dimension(  //
+    bool interior,            //
+    uint32_t pixel_dimension) {
   return interior ? QOIR_TILE_SIZE
                   : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
 }
@@ -627,20 +641,22 @@ qoir_private_tile_dimension(bool interior, uint32_t pixel_dimension) {
   qoir_private_free(options ? options->contextual_free_func : NULL, \
                     options ? options->memory_func_context : NULL, ptr)
 
-static inline void*                                                  //
-qoir_private_malloc(void* (*contextual_malloc_func)(void*, size_t),  //
-                    void* memory_func_context,                       //
-                    size_t len) {
+static inline void*                                  //
+qoir_private_malloc(                                 //
+    void* (*contextual_malloc_func)(void*, size_t),  //
+    void* memory_func_context,                       //
+    size_t len) {
   if (contextual_malloc_func) {
     return (*contextual_malloc_func)(memory_func_context, len);
   }
   return malloc(len);
 }
 
-static inline void                                             //
-qoir_private_free(void (*contextual_free_func)(void*, void*),  //
-                  void* memory_func_context,                   //
-                  void* ptr) {
+static inline void                               //
+qoir_private_free(                               //
+    void (*contextual_free_func)(void*, void*),  //
+    void* memory_func_context,                   //
+    void* ptr) {
   if (contextual_free_func) {
     (*contextual_free_func)(memory_func_context, ptr);
     return;
@@ -1173,15 +1189,17 @@ fail_invalid_data:
 #define QOIR_LZ4_HASH_TABLE_SHIFT 12
 
 static inline uint32_t  //
-qoir_lz4_private_hash(uint32_t x) {
+qoir_lz4_private_hash(  //
+    uint32_t x) {
   // 2654435761u is Knuth's magic constant.
   return (x * 2654435761u) >> (32 - QOIR_LZ4_HASH_TABLE_SHIFT);
 }
 
-static inline size_t  //
-qoir_lz4_private_longest_common_prefix(const uint8_t* p,
-                                       const uint8_t* q,
-                                       const uint8_t* p_limit) {
+static inline size_t                     //
+qoir_lz4_private_longest_common_prefix(  //
+    const uint8_t* p,                    //
+    const uint8_t* q,                    //
+    const uint8_t* p_limit) {
   const uint8_t* const original_p = p;
   size_t n = p_limit - p;
   while ((n >= 4) &&

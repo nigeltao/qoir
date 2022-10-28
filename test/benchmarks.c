@@ -44,11 +44,12 @@ typedef struct timings_struct {
   uint64_t decode_micros;
 } timings;
 
-void  //
-print_timings(timings* t,
-              const char* name0,
-              const char* name1,
-              const char* name2) {
+void                    //
+print_timings(          //
+    timings* t,         //
+    const char* name0,  //
+    const char* name1,  //
+    const char* name2) {
   double cratio = t->compressed_size / ((double)(t->original_size));
   double espeed = t->encode_pixels / ((double)(t->encode_micros));
   double dspeed = t->decode_pixels / ((double)(t->decode_micros));
@@ -61,12 +62,13 @@ typedef struct my_context_struct {
   timings timings[WALK_DIRECTORY_MAX_EXCL_DEPTH];
 } my_context;
 
-const char*  //
-bench_one_pixbuf(my_context* z,
-                 uint32_t depth,
-                 const char* dirname,
-                 const char* filename,
-                 qoir_pixel_buffer* src_pixbuf) {
+const char*                //
+bench_one_pixbuf(          //
+    my_context* z,         //
+    uint32_t depth,        //
+    const char* dirname,   //
+    const char* filename,  //
+    qoir_pixel_buffer* src_pixbuf) {
   qoir_encode_options encopts = {0};
   encopts.encbuf = &g_encbuf;
   qoir_encode_result enc = qoir_encode(src_pixbuf, &encopts);
@@ -135,13 +137,14 @@ bench_one_pixbuf(my_context* z,
   return NULL;
 }
 
-const char*  //
-bench_one_png(my_context* z,
-              uint32_t depth,
-              const char* dirname,
-              const char* filename,
-              const uint8_t* src_ptr,
-              size_t src_len) {
+const char*                  //
+bench_one_png(               //
+    my_context* z,           //
+    uint32_t depth,          //
+    const char* dirname,     //
+    const char* filename,    //
+    const uint8_t* src_ptr,  //
+    size_t src_len) {
   int width = 0;
   int height = 0;
   int channels = 0;
@@ -176,15 +179,21 @@ bench_one_png(my_context* z,
   return result;
 }
 
-const char*  //
-my_enter_callback(void* context, uint32_t depth, const char* dirname) {
+const char*          //
+my_enter_callback(   //
+    void* context,   //
+    uint32_t depth,  //
+    const char* dirname) {
   my_context* z = (my_context*)context;
   memset(&z->timings[depth], 0, sizeof(z->timings[depth]));
   return NULL;
 }
 
-const char*  //
-my_exit_callback(void* context, uint32_t depth, const char* dirname) {
+const char*          //
+my_exit_callback(    //
+    void* context,   //
+    uint32_t depth,  //
+    const char* dirname) {
   my_context* z = (my_context*)context;
   if (z->timings[depth].original_size > 0) {
     print_timings(&z->timings[depth], z->benchname, dirname, "");
@@ -192,11 +201,12 @@ my_exit_callback(void* context, uint32_t depth, const char* dirname) {
   return NULL;
 }
 
-const char*  //
-my_file_callback(void* context,
-                 uint32_t depth,
-                 const char* dirname,
-                 const char* filename) {
+const char*               //
+my_file_callback(         //
+    void* context,        //
+    uint32_t depth,       //
+    const char* dirname,  //
+    const char* filename) {
   my_context* z = (my_context*)context;
   size_t n = strlen(filename);
   if ((n < 4) || strcmp(filename + n - 4, ".png")) {
@@ -223,8 +233,9 @@ my_file_callback(void* context,
   return result;
 }
 
-int  //
-benchmark(const char* src_filename) {
+int         //
+benchmark(  //
+    const char* src_filename) {
   my_context z = {0};
   const char* status_message = NULL;
 
@@ -254,8 +265,10 @@ benchmark(const char* src_filename) {
 
 // ----
 
-int  //
-main(int argc, char** argv) {
+int            //
+main(          //
+    int argc,  //
+    char** argv) {
   g_number_of_reps = 5;
   g_verbose = 0;
 

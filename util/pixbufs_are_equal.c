@@ -20,8 +20,10 @@
 #include <stdint.h>
 #include <string.h>
 
-static bool  //
-pixbufs_are_equal(const qoir_pixel_buffer* pb0, const qoir_pixel_buffer* pb1) {
+static bool                        //
+pixbufs_are_equal(                 //
+    const qoir_pixel_buffer* pb0,  //
+    const qoir_pixel_buffer* pb1) {
   if ((pb0 == NULL) || (pb1 == NULL)) {
     return pb0 == pb1;
   } else if ((pb0->pixcfg.pixfmt != pb1->pixcfg.pixfmt) ||

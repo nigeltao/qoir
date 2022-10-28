@@ -39,8 +39,9 @@ typedef struct worker_data_struct {
   const char* status_message;
 } worker_data;
 
-int  //
-work(void* data) {
+int    //
+work(  //
+    void* data) {
   worker_data* wd = (worker_data*)data;
   qoir_decode_options opts = {0};
   memcpy(&opts, wd->options, sizeof(*wd->options));
@@ -160,8 +161,10 @@ multithreaded_decode(        //
 
 // ----
 
-SDL_Surface*  //
-load(const char* filename, void** owned_memory) {
+SDL_Surface*               //
+load(                      //
+    const char* filename,  //
+    void** owned_memory) {
   SDL_RWops* rw = SDL_RWFromFile(filename, "rb");
   if (!rw) {
     fprintf(stderr, "main: load: SDL_RWFromFile: %s\n", SDL_GetError());
@@ -231,8 +234,10 @@ load(const char* filename, void** owned_memory) {
 #endif
 }
 
-bool  //
-draw(SDL_Window* window, SDL_Surface* surface) {
+bool                     //
+draw(                    //
+    SDL_Window* window,  //
+    SDL_Surface* surface) {
   SDL_Surface* ws = SDL_GetWindowSurface(window);
   if (!ws) {
     // Use an indirect approach, for exotic window pixel formats (e.g. X.org 10
@@ -260,8 +265,10 @@ draw(SDL_Window* window, SDL_Surface* surface) {
   return true;
 }
 
-int  //
-main(int argc, char** argv) {
+int            //
+main(          //
+    int argc,  //
+    char** argv) {
   const char* filename = NULL;
   bool too_many_args = false;
   for (int i = 1; i < argc; i++) {

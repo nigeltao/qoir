@@ -31,7 +31,9 @@ typedef struct load_file_result_struct {
 } load_file_result;
 
 static load_file_result  //
-load_file(FILE* f, uint64_t max_incl_len) {
+load_file(               //
+    FILE* f,             //
+    uint64_t max_incl_len) {
   load_file_result result = {0};
   if (!f) {
     result.status_message = "#load_file: NULL file";

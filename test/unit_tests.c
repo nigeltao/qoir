@@ -29,11 +29,12 @@
 
 // ----
 
-int  //
-do_test_swizzle(const char* testname,
-                const char* funcname,
-                qoir_private_swizzle_func swizzle_func,
-                const uint8_t* want) {
+int                                          //
+do_test_swizzle(                             //
+    const char* testname,                    //
+    const char* funcname,                    //
+    qoir_private_swizzle_func swizzle_func,  //
+    const uint8_t* want) {
   static const uint8_t src[32] = {
       0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,  //
       0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,  //
@@ -68,8 +69,9 @@ do_test_swizzle(const char* testname,
   return 0;
 }
 
-int  //
-test_swizzle(void) {
+int            //
+test_swizzle(  //
+    void) {
   static const uint8_t want__copy_4[32] = {
       0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,  //
       0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,  //
@@ -204,8 +206,10 @@ test_swizzle(void) {
 
 // ----
 
-int  //
-do_test_round_trip(const char* testname, const char* filename) {
+int                        //
+do_test_round_trip(        //
+    const char* testname,  //
+    const char* filename) {
   FILE* f = fopen(filename, "rb");
   if (!f) {
     printf("%s: %s: %s\n", testname, filename, strerror(errno));
@@ -220,8 +224,9 @@ do_test_round_trip(const char* testname, const char* filename) {
   return 0;
 }
 
-int  //
-test_round_trip(void) {
+int               //
+test_round_trip(  //
+    void) {
   if (do_test_round_trip(__func__, "test/data/bricks-color.png") ||
       do_test_round_trip(__func__, "test/data/harvesters.png") ||
       do_test_round_trip(__func__, "test/data/hibiscus.primitive.png") ||
@@ -234,8 +239,10 @@ test_round_trip(void) {
 
 // ----
 
-int  //
-main(int argc, char** argv) {
+int            //
+main(          //
+    int argc,  //
+    char** argv) {
   return test_swizzle() ||  //
          test_round_trip();
 }

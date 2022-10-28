@@ -44,8 +44,10 @@ typedef struct walk_directory_state_struct {
   char path[4096];
 } walk_directory_state;
 
-static const char*  //
-walk_directory_1(walk_directory_state* z, DIR* d) {
+static const char*            //
+walk_directory_1(             //
+    walk_directory_state* z,  //
+    DIR* d) {
   int old_cwd = open(".", O_RDONLY, 0);
   if (old_cwd < 0) {
     return "#walk_directory: could not get current working directory";
@@ -118,19 +120,20 @@ done:
   } while (0);
 }
 
-static const char*  //
-walk_directory(DIR* d,
-               void* context,
-               const char* (*enter_callback)(void* context,
-                                             uint32_t depth,
-                                             const char* dirname),
-               const char* (*exit_callback)(void* context,
-                                            uint32_t depth,
-                                            const char* dirname),
-               const char* (*file_callback)(void* context,
-                                            uint32_t depth,
-                                            const char* dirname,
-                                            const char* filename)) {
+static const char*                                       //
+walk_directory(                                          //
+    DIR* d,                                              //
+    void* context,                                       //
+    const char* (*enter_callback)(void* context,         //
+                                  uint32_t depth,        //
+                                  const char* dirname),  //
+    const char* (*exit_callback)(void* context,          //
+                                 uint32_t depth,         //
+                                 const char* dirname),   //
+    const char* (*file_callback)(void* context,          //
+                                 uint32_t depth,         //
+                                 const char* dirname,    //
+                                 const char* filename)) {
   walk_directory_state z;
   z.context = context;
   z.enter_callback = enter_callback;

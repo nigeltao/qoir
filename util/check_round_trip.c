@@ -24,10 +24,11 @@
 
 // ----
 
-const char*  //
-check_round_trip_3(qoir_pixel_buffer* src_pixbuf,
-                   uint8_t* enc_ptr,
-                   size_t enc_len) {
+const char*                         //
+check_round_trip_3(                 //
+    qoir_pixel_buffer* src_pixbuf,  //
+    uint8_t* enc_ptr,               //
+    size_t enc_len) {
   qoir_decode_options opts = {0};
   opts.pixfmt = src_pixbuf->pixcfg.pixfmt;
   qoir_decode_result dec = qoir_decode(enc_ptr, enc_len, &opts);
@@ -42,8 +43,9 @@ check_round_trip_3(qoir_pixel_buffer* src_pixbuf,
   return NULL;
 }
 
-const char*  //
-check_round_trip_2(qoir_pixel_buffer* src_pixbuf) {
+const char*          //
+check_round_trip_2(  //
+    qoir_pixel_buffer* src_pixbuf) {
   qoir_encode_result enc = qoir_encode(src_pixbuf, NULL);
   if (enc.status_message) {
     free(enc.owned_memory);
@@ -54,8 +56,10 @@ check_round_trip_2(qoir_pixel_buffer* src_pixbuf) {
   return result;
 }
 
-const char*  //
-check_round_trip_1(const uint8_t* src_ptr, size_t src_len) {
+const char*                  //
+check_round_trip_1(          //
+    const uint8_t* src_ptr,  //
+    size_t src_len) {
   for (int channels = 3; channels <= 4; channels++) {
     int width = 0;
     int height = 0;
@@ -85,8 +89,9 @@ check_round_trip_1(const uint8_t* src_ptr, size_t src_len) {
   return NULL;
 }
 
-const char*  //
-check_round_trip(FILE* f) {
+const char*        //
+check_round_trip(  //
+    FILE* f) {
   load_file_result r = load_file(f, UINT64_MAX);
   if (r.status_message) {
     free(r.owned_memory);

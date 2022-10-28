@@ -31,7 +31,9 @@
 // ----
 
 static uint32_t  //
-crc32(uint8_t* p, size_t n) {
+crc32(           //
+    uint8_t* p,  //
+    size_t n) {
   // These numbers (derived from the 0xEDB88320 IEEE polynomial) is the result
   // of Go's "crc32.MakeTable(crc32.IEEE)" in C syntax.
   static const uint32_t table[256] = {
@@ -98,13 +100,16 @@ crc32(uint8_t* p, size_t n) {
 }
 
 static inline uint32_t  //
-peek_u32be(const uint8_t* p) {
+peek_u32be(             //
+    const uint8_t* p) {
   return ((uint32_t)(p[0]) << 24) | ((uint32_t)(p[1]) << 16) |
          ((uint32_t)(p[2]) << 8) | ((uint32_t)(p[3]) << 0);
 }
 
 static inline void  //
-poke_u32be(uint8_t* p, uint32_t x) {
+poke_u32be(         //
+    uint8_t* p,     //
+    uint32_t x) {
   p[0] = (uint8_t)(x >> 24);
   p[1] = (uint8_t)(x >> 16);
   p[2] = (uint8_t)(x >> 8);
@@ -112,7 +117,9 @@ poke_u32be(uint8_t* p, uint32_t x) {
 }
 
 static inline bool  //
-u64_overflow_add(uint64_t* x, uint64_t y) {
+u64_overflow_add(   //
+    uint64_t* x,    //
+    uint64_t y) {
   uint64_t old = *x;
   *x += y;
   return *x < old;
@@ -144,7 +151,9 @@ typedef struct extract_png_metadata_result_struct {
 } extract_png_metadata_result;
 
 static extract_png_metadata_result  //
-extract_png_metadata(const uint8_t* src_ptr, size_t src_len) {
+extract_png_metadata(               //
+    const uint8_t* src_ptr,         //
+    size_t src_len) {
   extract_png_metadata_result result = {0};
   if ((src_len < 8) || (peek_u32be(src_ptr + 0) != 0x89504E47) ||
       (peek_u32be(src_ptr + 4) != 0x0D0A1A0A)) {
@@ -196,10 +205,11 @@ extract_png_metadata(const uint8_t* src_ptr, size_t src_len) {
   return result;
 }
 
-load_file_result  //
-convert_from_png_to_qoir(const uint8_t* src_ptr,
-                         size_t src_len,
-                         const qoir_encode_options* enc_opts) {
+load_file_result             //
+convert_from_png_to_qoir(    //
+    const uint8_t* src_ptr,  //
+    size_t src_len,          //
+    const qoir_encode_options* enc_opts) {
   load_file_result result = {0};
 
   int width = 0;
@@ -274,8 +284,11 @@ typedef struct my_stbi_write_func_context_struct {
   qoir_decode_result* qdr;
 } my_stbi_write_func_context;
 
-void  //
-my_stbi_write_func(void* context, void* data, int size) {
+void                 //
+my_stbi_write_func(  //
+    void* context,   //
+    void* data,      //
+    int size) {
   my_stbi_write_func_context* ctx = (my_stbi_write_func_context*)context;
   if (!ctx || !ctx->lfr || !ctx->qdr) {
     return;
@@ -395,8 +408,10 @@ my_stbi_write_func(void* context, void* data, int size) {
   memcpy(p, data, 12);
 }
 
-load_file_result  //
-convert_from_qoir_to_png(const uint8_t* src_ptr, size_t src_len) {
+load_file_result             //
+convert_from_qoir_to_png(    //
+    const uint8_t* src_ptr,  //
+    size_t src_len) {
   load_file_result result = {0};
 
   qoir_decode_pixel_configuration_result cfg =
@@ -446,8 +461,10 @@ usage() {
   return 1;
 }
 
-int  //
-main(int argc, char** argv) {
+int            //
+main(          //
+    int argc,  //
+    char** argv) {
   const char* arg_src = NULL;
   const char* arg_dst = NULL;
   qoir_encode_options encopts = {0};
