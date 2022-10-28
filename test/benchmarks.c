@@ -30,10 +30,19 @@
 
 // ----
 
+const char error_not_implemented[] =  //
+    "#main: not implemented";
+
+#if defined(CONFIG_FULL_BENCHMARKS)
+#include "../util/extra_benchmarks.c"
+#endif
+
+// ----
+
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+
 int g_number_of_reps;
 int g_verbose;
-qoir_decode_buffer g_decbuf;
-qoir_encode_buffer g_encbuf;
 
 typedef struct timings_struct {
   uint64_t original_size;
@@ -44,38 +53,137 @@ typedef struct timings_struct {
   uint64_t decode_micros;
 } timings;
 
-void                    //
-print_timings(          //
-    timings* t,         //
-    const char* name0,  //
-    const char* name1,  //
-    const char* name2) {
-  double cratio = t->compressed_size / ((double)(t->original_size));
-  double espeed = t->encode_pixels / ((double)(t->encode_micros));
-  double dspeed = t->decode_pixels / ((double)(t->decode_micros));
-  printf("%s%6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
-         "QOIR    ", cratio, espeed, dspeed, name0, name1, name2);
+void               //
+add_timings(       //
+    timings* dst,  //
+    const timings* src) {
+  dst->original_size += src->original_size;
+  dst->compressed_size += src->compressed_size;
+  dst->encode_pixels += src->encode_pixels;
+  dst->encode_micros += src->encode_micros;
+  dst->decode_pixels += src->decode_pixels;
+  dst->decode_micros += src->decode_micros;
 }
 
-typedef struct my_context_struct {
-  const char* benchname;
-  timings timings[WALK_DIRECTORY_MAX_EXCL_DEPTH];
-} my_context;
+void                         //
+print_timings(               //
+    timings* t,              //
+    const char* formatname,  //
+    const char* name0,       //
+    const char* name1,       //
+    const char* name2) {
+  static double nan = 0.0 / 0.0;
+  double cratio = t->compressed_size / ((double)(t->original_size));
+  double espeed = t->encode_micros
+                      ? (t->encode_pixels / ((double)(t->encode_micros)))
+                      : nan;
+  double dspeed = t->decode_micros
+                      ? (t->decode_pixels / ((double)(t->decode_micros)))
+                      : nan;
+#if defined(CONFIG_FULL_BENCHMARKS)
+  printf(
+      "%-16s%6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
+      formatname, cratio, espeed, dspeed, name0, name1, name2);
+#else
+  printf("%-8s%6.4f CmpRatio  %8.2f EncMPixels/s  %8.2f DecMPixels/s  %s%s%s\n",
+         formatname, cratio, espeed, dspeed, name0, name1, name2);
+#endif
+}
 
-const char*                //
-bench_one_pixbuf(          //
-    my_context* z,         //
-    uint32_t depth,        //
-    const char* dirname,   //
-    const char* filename,  //
+typedef struct timings_result_struct {
+  const char* status_message;
+  timings value;
+} timings_result;
+
+static timings_result       //
+make_timings_result_error(  //
+    const char* status_message) {
+  timings_result result = {0};
+  result.status_message = status_message;
+  return result;
+}
+
+// ----
+
+static qoir_decode_result    //
+my_decode_qoir(              //
+    const uint8_t* src_ptr,  //
+    const size_t src_len) {
+  // static avoids an allocation every time this function is called, but it
+  // means that this function is not thread-safe.
+  static qoir_decode_buffer decbuf;
+
+  qoir_decode_options decopts = {0};
+  decopts.decbuf = &decbuf;
+  return qoir_decode(src_ptr, src_len, &decopts);
+}
+
+static qoir_encode_result    //
+my_encode_qoir(              //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf) {
+  // static avoids an allocation every time this function is called, but it
+  // means that this function is not thread-safe.
+  static qoir_encode_buffer encbuf;
+
   qoir_encode_options encopts = {0};
-  encopts.encbuf = &g_encbuf;
-  qoir_encode_result enc = qoir_encode(src_pixbuf, &encopts);
-  if (enc.status_message) {
-    printf("%s%s%s: could not encode QOIR\n", z->benchname, dirname, filename);
+  encopts.encbuf = &encbuf;
+  return qoir_encode(src_pixbuf, &encopts);
+}
+
+typedef struct format_struct {
+  const char* name;
+  qoir_decode_result (*decode_func)(const uint8_t* src_ptr,
+                                    const size_t src_len);
+  qoir_encode_result (*encode_func)(const uint8_t* png_ptr,
+                                    const size_t png_len,
+                                    qoir_pixel_buffer* src_pixbuf);
+} format;
+
+format my_formats[] = {
+    {"QOIR", &my_decode_qoir, &my_encode_qoir},
+
+#if defined(CONFIG_FULL_BENCHMARKS)
+    {"QOI", &my_decode_qoi, &my_encode_qoi},
+#endif
+};
+
+#define MAX_INCL_NUMBER_OF_FORMATS 16
+
+static inline size_t  //
+number_of_formats() {
+  size_t n = ARRAY_SIZE(my_formats);
+  return (n < MAX_INCL_NUMBER_OF_FORMATS) ? n : MAX_INCL_NUMBER_OF_FORMATS;
+}
+
+// ----
+
+static timings_result        //
+encode_decode(               //
+    const char* benchname,   //
+    const char* dirname,     //
+    const char* filename,    //
+    const format* f,         //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf) {
+  timings_result result = {0};
+
+  const uint8_t* enc_ptr = NULL;
+  size_t enc_len = 0;
+  qoir_encode_result enc = (*f->encode_func)(png_ptr, png_len, src_pixbuf);
+  if (enc.status_message == error_not_implemented) {
+    enc_ptr = png_ptr;
+    enc_len = png_len;
+  } else if (enc.status_message) {
+    printf("%s%s%s: could not encode %s\n", benchname, dirname, filename,
+           f->name);
     free(enc.owned_memory);
-    return enc.status_message;
+    return make_timings_result_error(enc.status_message);
+  } else {
+    enc_ptr = enc.dst_ptr;
+    enc_len = enc.dst_len;
   }
 
   uint64_t original_num_bytes =
@@ -84,58 +192,60 @@ bench_one_pixbuf(          //
   uint64_t original_num_pixels =
       ((uint64_t)(src_pixbuf->pixcfg.height_in_pixels)) *
       ((uint64_t)(src_pixbuf->pixcfg.width_in_pixels));
-  for (int d = 0; d <= depth; d++) {
-    z->timings[d].original_size += original_num_bytes;
-    z->timings[d].compressed_size += enc.dst_len;
-  }
+  result.value.original_size = original_num_bytes;
+  result.value.compressed_size = enc_len;
 
   {
     struct timeval timeval0;
     gettimeofday(&timeval0, NULL);
     for (int i = 0; i < g_number_of_reps; i++) {
-      free(qoir_encode(src_pixbuf, &encopts).owned_memory);
+      free((*f->encode_func)(png_ptr, png_len, src_pixbuf).owned_memory);
     }
     struct timeval timeval1;
     gettimeofday(&timeval1, NULL);
 
     int64_t micros = ((int64_t)(timeval1.tv_sec - timeval0.tv_sec)) * 1000000 +
                      ((int64_t)(timeval1.tv_usec - timeval0.tv_usec));
-    for (int d = 0; d <= depth; d++) {
-      z->timings[d].encode_pixels += g_number_of_reps * original_num_pixels;
-      z->timings[d].encode_micros += (micros > 0) ? micros : 1;
-    }
+    result.value.encode_pixels = g_number_of_reps * original_num_pixels;
+    result.value.encode_micros = (enc.status_message == error_not_implemented)
+                                     ? 0
+                                     : ((micros > 0) ? micros : 1);
   }
 
-  qoir_decode_options decopts = {0};
-  decopts.decbuf = &g_decbuf;
-  qoir_decode_result dec = qoir_decode(enc.dst_ptr, enc.dst_len, &decopts);
+  qoir_decode_result dec = (*f->decode_func)(enc_ptr, enc_len);
   free(dec.owned_memory);
-  if (dec.status_message) {
-    printf("%s%s%s: could not decode QOIR\n", z->benchname, dirname, filename);
+  if (dec.status_message == error_not_implemented) {
+    // No-op.
+  } else if (dec.status_message) {
+    printf("%s%s%s: could not decode %s\n", benchname, dirname, filename,
+           f->name);
     free(enc.owned_memory);
-    return dec.status_message;
-  }
-
-  {
+    return make_timings_result_error(dec.status_message);
+  } else {
     struct timeval timeval0;
     gettimeofday(&timeval0, NULL);
     for (int i = 0; i < g_number_of_reps; i++) {
-      free(qoir_decode(enc.dst_ptr, enc.dst_len, &decopts).owned_memory);
+      free((*f->decode_func)(enc_ptr, enc_len).owned_memory);
     }
     struct timeval timeval1;
     gettimeofday(&timeval1, NULL);
 
     int64_t micros = ((int64_t)(timeval1.tv_sec - timeval0.tv_sec)) * 1000000 +
                      ((int64_t)(timeval1.tv_usec - timeval0.tv_usec));
-    for (int d = 0; d <= depth; d++) {
-      z->timings[d].decode_pixels += g_number_of_reps * original_num_pixels;
-      z->timings[d].decode_micros += (micros > 0) ? micros : 1;
-    }
+    result.value.decode_pixels = g_number_of_reps * original_num_pixels;
+    result.value.decode_micros = (micros > 0) ? micros : 1;
   }
 
   free(enc.owned_memory);
-  return NULL;
+  return result;
 }
+
+// ----
+
+typedef struct my_context_struct {
+  const char* benchname;
+  timings timings[MAX_INCL_NUMBER_OF_FORMATS][WALK_DIRECTORY_MAX_EXCL_DEPTH];
+} my_context;
 
 const char*                  //
 bench_one_png(               //
@@ -174,9 +284,21 @@ bench_one_png(               //
   pixbuf.pixcfg.height_in_pixels = height;
   pixbuf.data = (uint8_t*)pixbuf_data;
   pixbuf.stride_in_bytes = (size_t)channels * (size_t)width;
-  const char* result = bench_one_pixbuf(z, depth, dirname, filename, &pixbuf);
+
+  const char* ret = NULL;
+  for (size_t i = 0; i < number_of_formats(); i++) {
+    timings_result t = encode_decode(z->benchname, dirname, filename,
+                                     &my_formats[i], src_ptr, src_len, &pixbuf);
+    if (t.status_message) {
+      ret = t.status_message;
+      break;
+    }
+    for (int d = 0; d <= depth; d++) {
+      add_timings(&z->timings[i][d], &t.value);
+    }
+  }
   stbi_image_free(pixbuf_data);
-  return result;
+  return ret;
 }
 
 const char*          //
@@ -185,7 +307,9 @@ my_enter_callback(   //
     uint32_t depth,  //
     const char* dirname) {
   my_context* z = (my_context*)context;
-  memset(&z->timings[depth], 0, sizeof(z->timings[depth]));
+  for (size_t i = 0; i < number_of_formats(); i++) {
+    memset(&z->timings[i][depth], 0, sizeof(z->timings[i][depth]));
+  }
   return NULL;
 }
 
@@ -195,8 +319,11 @@ my_exit_callback(    //
     uint32_t depth,  //
     const char* dirname) {
   my_context* z = (my_context*)context;
-  if (z->timings[depth].original_size > 0) {
-    print_timings(&z->timings[depth], z->benchname, dirname, "");
+  for (size_t i = 0; i < number_of_formats(); i++) {
+    if (z->timings[i][depth].original_size > 0) {
+      print_timings(&z->timings[i][depth], my_formats[i].name, z->benchname,
+                    dirname, "");
+    }
   }
   return NULL;
 }
@@ -223,10 +350,15 @@ my_file_callback(         //
   fclose(f);
   const char* result = r.status_message;
   if (!result) {
-    memset(&z->timings[depth], 0, sizeof(z->timings[depth]));
+    for (size_t i = 0; i < number_of_formats(); i++) {
+      memset(&z->timings[i][depth], 0, sizeof(z->timings[i][depth]));
+    }
     result = bench_one_png(z, depth, dirname, filename, r.dst_ptr, r.dst_len);
     if (g_verbose || (z->benchname[0] == '\x00')) {
-      print_timings(&z->timings[depth], z->benchname, dirname, filename);
+      for (size_t i = 0; i < number_of_formats(); i++) {
+        print_timings(&z->timings[i][depth], my_formats[i].name, z->benchname,
+                      dirname, filename);
+      }
     }
   }
   free(r.owned_memory);
@@ -271,6 +403,11 @@ main(          //
     char** argv) {
   g_number_of_reps = 5;
   g_verbose = 0;
+
+  if (ARRAY_SIZE(my_formats) > MAX_INCL_NUMBER_OF_FORMATS) {
+    printf("too many formats\n");
+    return 1;
+  }
 
   for (int i = 1; i < argc; i++) {
     if (*argv[i] != '-') {
