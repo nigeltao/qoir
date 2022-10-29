@@ -5530,7 +5530,7 @@ qoir_lz4_block_encode(                     //
         sp = next_sp;
         next_sp += step;
         step = step_counter++ >> 6;
-        if ((next_sp - src_ptr) > final_literals_limit) {
+        if (((size_t)(next_sp - src_ptr)) > final_literals_limit) {
           goto final_literals;
         }
         uint32_t* hash_table_entry = &hash_table[next_hash];
@@ -5590,7 +5590,7 @@ qoir_lz4_block_encode(                     //
 
         // Update the literal_start and check the final_literals_limit.
         literal_start = sp;
-        if ((sp - src_ptr) >= final_literals_limit) {
+        if (((size_t)(sp - src_ptr)) >= final_literals_limit) {
           goto final_literals;
         }
 
@@ -5907,7 +5907,7 @@ qoir_private_decode_tile_opcodes(  //
 
     } else if ((s64 & 0xFF) < 0xD7) {  // QOIR_OP_RUNS
       size_t run_length = (s64 & 0xFF) >> 0x03;
-      if ((dq - dp) < (4 * (run_length + 1))) {
+      if (((size_t)(dq - dp)) < (4 * (run_length + 1))) {
         result.status_message = qoir_status_message__error_invalid_data;
         return result;
       }
@@ -5919,7 +5919,7 @@ qoir_private_decode_tile_opcodes(  //
 
     } else if ((s64 & 0xFF) == 0xD7) {  // QOIR_OP_RUNL
       size_t run_length = (s64 >> 0x08) & 0xFF;
-      if ((dq - dp) < (4 * (run_length + 1))) {
+      if (((size_t)(dq - dp)) < (4 * (run_length + 1))) {
         result.status_message = qoir_status_message__error_invalid_data;
         return result;
       }
@@ -5994,158 +5994,167 @@ qoir_private_decode_qpix_payload(       //
     int32_t offset_x,                   //
     int32_t offset_y,                   //
     uint32_t lossiness) {
-  qoir_rectangle dst_clip_rect =
-      qoir_make_rectangle(0, 0, (int32_t)dst_pixbuf.pixcfg.width_in_pixels,
-                          (int32_t)dst_pixbuf.pixcfg.height_in_pixels);
-  dst_clip_rect = qoir_rectangle__intersect(dst_clip_rect, dst_clip_rectangle);
-  qoir_rectangle dst_clip_rect_in_src_space;
-  dst_clip_rect_in_src_space.x0 = dst_clip_rect.x0 - offset_x;
-  dst_clip_rect_in_src_space.y0 = dst_clip_rect.y0 - offset_y;
-  dst_clip_rect_in_src_space.x1 = dst_clip_rect.x1 - offset_x;
-  dst_clip_rect_in_src_space.y1 = dst_clip_rect.y1 - offset_y;
+  do {
+    qoir_rectangle dst_clip_rect =
+        qoir_make_rectangle(0, 0, (int32_t)dst_pixbuf.pixcfg.width_in_pixels,
+                            (int32_t)dst_pixbuf.pixcfg.height_in_pixels);
+    dst_clip_rect =
+        qoir_rectangle__intersect(dst_clip_rect, dst_clip_rectangle);
+    qoir_rectangle dst_clip_rect_in_src_space;
+    dst_clip_rect_in_src_space.x0 = dst_clip_rect.x0 - offset_x;
+    dst_clip_rect_in_src_space.y0 = dst_clip_rect.y0 - offset_y;
+    dst_clip_rect_in_src_space.x1 = dst_clip_rect.x1 - offset_x;
+    dst_clip_rect_in_src_space.y1 = dst_clip_rect.y1 - offset_y;
 
-  size_t height_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
-  size_t width_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_width_in_pixels);
-  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
-    goto done;
-  }
-  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
-  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
+    size_t height_in_tiles =
+        qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
+    size_t width_in_tiles =
+        qoir_calculate_number_of_tiles_1d(src_width_in_pixels);
+    if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
+      goto done;
+    }
+    size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
+    size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
 
-  qoir_private_swizzle_func swizzle_func =
-      qoir_private_choose_decode_swizzle_func(dst_pixbuf.pixcfg.pixfmt,
-                                              src_pixfmt);
-  if (!swizzle_func) {
-    return qoir_status_message__error_unsupported_pixfmt;
-  }
-  size_t num_dst_channels =
-      qoir_pixel_format__bytes_per_pixel(dst_pixbuf.pixcfg.pixfmt);
+    qoir_private_swizzle_func swizzle_func =
+        qoir_private_choose_decode_swizzle_func(dst_pixbuf.pixcfg.pixfmt,
+                                                src_pixfmt);
+    if (!swizzle_func) {
+      return qoir_status_message__error_unsupported_pixfmt;
+    }
+    size_t num_dst_channels =
+        qoir_pixel_format__bytes_per_pixel(dst_pixbuf.pixcfg.pixfmt);
 
-  uint8_t* literals_pre_padding = decbuf->private_impl.literals;
-  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
-    literals_pre_padding[i + 0] = 0x00;
-    literals_pre_padding[i + 1] = 0x00;
-    literals_pre_padding[i + 2] = 0x00;
-    literals_pre_padding[i + 3] = 0xFF;
-  }
+    uint8_t* literals_pre_padding = decbuf->private_impl.literals;
+    for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
+      literals_pre_padding[i + 0] = 0x00;
+      literals_pre_padding[i + 1] = 0x00;
+      literals_pre_padding[i + 2] = 0x00;
+      literals_pre_padding[i + 3] = 0xFF;
+    }
 
-  // ty, tx, tw and th are the tile's top-left offset, width and height, all
-  // measured in pixels.
-  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
-    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
-      size_t tw = qoir_private_tile_dimension(tx < tx1, src_width_in_pixels);
-      size_t th = qoir_private_tile_dimension(ty < ty1, src_height_in_pixels);
-      qoir_rectangle src_clip_rect =
-          qoir_make_rectangle((int32_t)(tx + 0), (int32_t)(ty + 0),
-                              (int32_t)(tx + tw), (int32_t)(ty + th));
-      src_clip_rect =
-          qoir_rectangle__intersect(src_clip_rect, src_clip_rectangle);
-      src_clip_rect =
-          qoir_rectangle__intersect(src_clip_rect, dst_clip_rect_in_src_space);
+    // ty, tx, tw and th are the tile's top-left offset, width and height, all
+    // measured in pixels.
+    for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
+      for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
+        size_t tw = qoir_private_tile_dimension(tx < tx1, src_width_in_pixels);
+        size_t th = qoir_private_tile_dimension(ty < ty1, src_height_in_pixels);
+        qoir_rectangle src_clip_rect =
+            qoir_make_rectangle((int32_t)(tx + 0), (int32_t)(ty + 0),
+                                (int32_t)(tx + tw), (int32_t)(ty + th));
+        src_clip_rect =
+            qoir_rectangle__intersect(src_clip_rect, src_clip_rectangle);
+        src_clip_rect = qoir_rectangle__intersect(src_clip_rect,
+                                                  dst_clip_rect_in_src_space);
 
-      if (src_len < 4) {
-        return qoir_status_message__error_invalid_data;
-      }
-      uint32_t prefix = qoir_private_peek_u32le(src_ptr);
-      src_ptr += 4;
-      src_len -= 4;
-      size_t tile_len = prefix & 0xFFFFFF;
-      if ((src_len < (tile_len + 8)) ||  //
-          (((4 * QOIR_TS2) < tile_len) && ((prefix >> 31) != 0))) {
-        return qoir_status_message__error_invalid_data;
-      }
+        if (src_len < 4) {
+          return qoir_status_message__error_invalid_data;
+        }
+        uint32_t prefix = qoir_private_peek_u32le(src_ptr);
+        src_ptr += 4;
+        src_len -= 4;
+        size_t tile_len = prefix & 0xFFFFFF;
+        if ((src_len < (tile_len + 8)) ||  //
+            (((4 * QOIR_TS2) < tile_len) && ((prefix >> 31) != 0))) {
+          return qoir_status_message__error_invalid_data;
+        }
 
-      if (qoir_rectangle__is_empty(src_clip_rect)) {
+        if (qoir_rectangle__is_empty(src_clip_rect)) {
+          src_ptr += tile_len;
+          src_len -= tile_len;
+          continue;
+        }
+
+        const uint8_t* literals = NULL;
+        switch (prefix >> 24) {
+          case 0: {  // Literals tile format.
+            if (tile_len != (4 * tw * th)) {
+              return qoir_status_message__error_invalid_data;
+            }
+            literals = src_ptr;
+            break;
+          }
+          case 1: {  // Opcodes tile format.
+            qoir_size_result r = qoir_private_decode_tile_opcodes(
+                decbuf->private_impl.literals,              //
+                QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
+                src_ptr, tile_len + 8);                     // See § for +8.
+            if (r.status_message) {
+              return r.status_message;
+            } else if (r.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
+              return qoir_status_message__error_invalid_data;
+            }
+            literals =
+                decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
+            break;
+          }
+          case 2: {  // LZ4-Literals tile format.
+            qoir_size_result r = qoir_lz4_block_decode(
+                decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+                sizeof(decbuf->private_impl.literals) -
+                    QOIR_LITERALS_PRE_PADDING,
+                src_ptr, tile_len);
+            if (r.status_message) {
+              return qoir_status_message__error_invalid_data;
+            } else if (r.value != (4 * tw * th)) {
+              return qoir_status_message__error_invalid_data;
+            }
+            literals =
+                decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
+            break;
+          }
+          case 3: {  // LZ4-Opcodes tile format.
+            qoir_size_result r0 = qoir_lz4_block_decode(
+                decbuf->private_impl.opcodes,
+                sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
+            if (r0.status_message) {
+              return qoir_status_message__error_invalid_data;
+            }
+            qoir_size_result r1 = qoir_private_decode_tile_opcodes(
+                decbuf->private_impl.literals,                //
+                QOIR_LITERALS_PRE_PADDING + (4 * tw * th),    //
+                decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
+            if (r1.status_message) {
+              return r1.status_message;
+            } else if (r1.value !=
+                       (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
+              return qoir_status_message__error_invalid_data;
+            }
+            literals =
+                decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
+            break;
+          }
+          default:
+            return qoir_status_message__error_unsupported_tile_format;
+        }
+
         src_ptr += tile_len;
         src_len -= tile_len;
-        continue;
+
+        if (lossiness) {
+          uint8_t* p = decbuf->private_impl.opcodes;
+          const uint8_t* q = literals;
+          const uint8_t* unlossify =
+              qoir_private_table_unlossify[lossiness - 1];
+          for (uint32_t i = 4 * tw * th; i > 0; i--) {
+            *p++ = unlossify[*q++];
+          }
+          literals = decbuf->private_impl.opcodes;
+        }
+
+        uint8_t* dp =
+            dst_pixbuf.data +
+            ((src_clip_rect.y0 + offset_y) * dst_pixbuf.stride_in_bytes) +
+            ((src_clip_rect.x0 + offset_x) * num_dst_channels);
+        const uint8_t* sp = literals +
+                            ((src_clip_rect.y0 & QOIR_TILE_MASK) * 4 * tw) +
+                            ((src_clip_rect.x0 & QOIR_TILE_MASK) * 4);
+        (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, sp, 4 * tw,
+                        qoir_rectangle__width(src_clip_rect),
+                        qoir_rectangle__height(src_clip_rect));
       }
-
-      const uint8_t* literals = NULL;
-      switch (prefix >> 24) {
-        case 0: {  // Literals tile format.
-          if (tile_len != (4 * tw * th)) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = src_ptr;
-          break;
-        }
-        case 1: {  // Opcodes tile format.
-          qoir_size_result r = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals,              //
-              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
-              src_ptr, tile_len + 8);                     // See § for +8.
-          if (r.status_message) {
-            return r.status_message;
-          } else if (r.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
-          break;
-        }
-        case 2: {  // LZ4-Literals tile format.
-          qoir_size_result r = qoir_lz4_block_decode(
-              decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
-              sizeof(decbuf->private_impl.literals) - QOIR_LITERALS_PRE_PADDING,
-              src_ptr, tile_len);
-          if (r.status_message) {
-            return qoir_status_message__error_invalid_data;
-          } else if (r.value != (4 * tw * th)) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
-          break;
-        }
-        case 3: {  // LZ4-Opcodes tile format.
-          qoir_size_result r0 = qoir_lz4_block_decode(
-              decbuf->private_impl.opcodes,
-              sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
-          if (r0.status_message) {
-            return qoir_status_message__error_invalid_data;
-          }
-          qoir_size_result r1 = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals,                //
-              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),    //
-              decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
-          if (r1.status_message) {
-            return r1.status_message;
-          } else if (r1.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
-          break;
-        }
-        default:
-          return qoir_status_message__error_unsupported_tile_format;
-      }
-
-      src_ptr += tile_len;
-      src_len -= tile_len;
-
-      if (lossiness) {
-        uint8_t* p = decbuf->private_impl.opcodes;
-        const uint8_t* q = literals;
-        const uint8_t* unlossify = qoir_private_table_unlossify[lossiness - 1];
-        for (uint32_t i = 4 * tw * th; i > 0; i--) {
-          *p++ = unlossify[*q++];
-        }
-        literals = decbuf->private_impl.opcodes;
-      }
-
-      uint8_t* dp =
-          dst_pixbuf.data +
-          ((src_clip_rect.y0 + offset_y) * dst_pixbuf.stride_in_bytes) +
-          ((src_clip_rect.x0 + offset_x) * num_dst_channels);
-      const uint8_t* sp = literals +
-                          ((src_clip_rect.y0 & QOIR_TILE_MASK) * 4 * tw) +
-                          ((src_clip_rect.x0 & QOIR_TILE_MASK) * 4);
-      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, sp, 4 * tw,
-                      qoir_rectangle__width(src_clip_rect),
-                      qoir_rectangle__height(src_clip_rect));
     }
-  }
+  } while (false);
 
 done:
   if (src_len != 8) {
@@ -6168,195 +6177,200 @@ qoir_decode(                          //
     const size_t src_len,             //
     const qoir_decode_options* options) {
   qoir_decode_result result = {0};
-  qoir_rectangle dst_clip_rectangle =
-      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
-  qoir_rectangle src_clip_rectangle =
-      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
-  int32_t offset_x = 0;
-  int32_t offset_y = 0;
-  if (options) {
-    if ((options->pixbuf.pixcfg.width_in_pixels > 0xFFFFFF) ||
-        (options->pixbuf.pixcfg.height_in_pixels > 0xFFFFFF)) {
-      return qoir_private_make_decode_result_error(
-          qoir_status_message__error_unsupported_pixbuf_dimensions);
-    }
-    memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
-    if (options->use_dst_clip_rectangle) {
-      memcpy(&dst_clip_rectangle, &options->dst_clip_rectangle,
-             sizeof(options->dst_clip_rectangle));
-    }
-    if (options->use_src_clip_rectangle) {
-      memcpy(&src_clip_rectangle, &options->src_clip_rectangle,
-             sizeof(options->src_clip_rectangle));
-    }
-    if ((-0xFFFFFF <= options->offset_x) && (options->offset_x <= 0xFFFFFF) &&
-        (-0xFFFFFF <= options->offset_y) && (options->offset_y <= 0xFFFFFF)) {
-      offset_x = options->offset_x;
-      offset_y = options->offset_y;
-    } else {
-      dst_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
-      src_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
-    }
-  }
 
-  if ((src_len < 44) ||
-      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
-    return qoir_private_make_decode_result_error(
-        qoir_status_message__error_invalid_data);
-  }
-  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
-  if ((qoir_chunk_payload_len < 8) ||
-      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
-      (qoir_chunk_payload_len > (src_len - 44))) {
-    return qoir_private_make_decode_result_error(
-        qoir_status_message__error_invalid_data);
-  }
-
-  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
-  uint32_t width_in_pixels = 0xFFFFFF & header0;
-  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
-  switch (src_pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-      break;
-    default:
-      goto fail_invalid_data;
-  }
-  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
-  uint32_t height_in_pixels = 0xFFFFFF & header1;
-  uint32_t lossiness = 0x07 & (header1 >> 24);
-
-  qoir_pixel_format dst_pixfmt =
-      (options && !qoir_pixel_buffer__is_zero(options->pixbuf))
-          ? options->pixbuf.pixcfg.pixfmt
-          : ((options && options->pixfmt) ? options->pixfmt
-                                          : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL);
-  uint64_t dst_width_in_bytes =
-      width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
-
-  bool seen_qpix = false;
-  const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_len);
-  size_t sn = src_len - (12 + qoir_chunk_payload_len);
-  while (1) {
-    if (sn < 12) {
-      goto fail_invalid_data;
-    }
-    uint32_t chunk_type = qoir_private_peek_u32le(sp + 0);
-    uint64_t payload_len = qoir_private_peek_u64le(sp + 4);
-    if (payload_len > 0x7FFFFFFFFFFFFFFFull) {
-      goto fail_invalid_data;
-    }
-    sp += 12;
-    sn -= 12;
-
-    if (chunk_type == 0x52494F51) {  // "QOIR"le.
-      goto fail_invalid_data;
-    } else if (chunk_type == 0x444E4551) {  // "QEND"le.
-      if ((payload_len != 0) || (sn != 0)) {
-        goto fail_invalid_data;
-      }
-      break;
-    }
-
-    // This chunk must be followed by at least the QEND chunk (12 bytes).
-    if ((sn < payload_len) || ((sn - payload_len) < 12)) {
-      goto fail_invalid_data;
-    }
-
-    if (chunk_type == 0x58495051) {  // "QPIX"le.
-      if (seen_qpix) {
-        goto fail_invalid_data;
-      }
-      seen_qpix = true;
-
-      uint64_t pixbuf_len = dst_width_in_bytes * (uint64_t)height_in_pixels;
-      if (pixbuf_len > SIZE_MAX) {
+  do {
+    qoir_rectangle dst_clip_rectangle =
+        qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
+    qoir_rectangle src_clip_rectangle =
+        qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
+    int32_t offset_x = 0;
+    int32_t offset_y = 0;
+    if (options) {
+      if ((options->pixbuf.pixcfg.width_in_pixels > 0xFFFFFF) ||
+          (options->pixbuf.pixcfg.height_in_pixels > 0xFFFFFF)) {
         return qoir_private_make_decode_result_error(
             qoir_status_message__error_unsupported_pixbuf_dimensions);
-
-      } else if (pixbuf_len > 0) {
-        if (qoir_pixel_buffer__is_zero(result.dst_pixbuf)) {
-          result.owned_memory = QOIR_MALLOC((size_t)pixbuf_len);
-          if (!result.owned_memory) {
-            return qoir_private_make_decode_result_error(
-                qoir_status_message__error_out_of_memory);
-          }
-          if (options && (options->use_dst_clip_rectangle ||
-                          options->use_src_clip_rectangle)) {
-            memset(result.owned_memory, 0, pixbuf_len);
-          }
-          result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
-          result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
-          result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
-          result.dst_pixbuf.data = result.owned_memory;
-          result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
-        }
-        qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
-        bool free_decbuf = false;
-        if (!decbuf) {
-          decbuf = (qoir_decode_buffer*)QOIR_MALLOC(sizeof(qoir_decode_buffer));
-          if (!decbuf) {
-            QOIR_FREE(result.owned_memory);
-            return qoir_private_make_decode_result_error(
-                qoir_status_message__error_out_of_memory);
-          }
-          free_decbuf = true;
-        }
-        const char* status_message = qoir_private_decode_qpix_payload(
-            decbuf, result.dst_pixbuf, dst_clip_rectangle, src_pixfmt,
-            width_in_pixels, height_in_pixels, sp,
-            payload_len + 8,  // See § for +8.
-            src_clip_rectangle, offset_x, offset_y, lossiness);
-        if (free_decbuf) {
-          QOIR_FREE(decbuf);
-        }
-        if (status_message) {
-          QOIR_FREE(result.owned_memory);
-          return qoir_private_make_decode_result_error(status_message);
-        }
-
-      } else if (payload_len != 0) {
-        goto fail_invalid_data;
       }
-
-    } else if (chunk_type == 0x50434943) {  // "CICP"le.
-      if (result.metadata_cicp_ptr) {
-        goto fail_invalid_data;
+      memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
+      if (options->use_dst_clip_rectangle) {
+        memcpy(&dst_clip_rectangle, &options->dst_clip_rectangle,
+               sizeof(options->dst_clip_rectangle));
       }
-      result.metadata_cicp_ptr = sp;
-      result.metadata_cicp_len = payload_len;
-
-    } else if (chunk_type == 0x50434349) {  // "ICCP"le.
-      if (result.metadata_iccp_ptr) {
-        goto fail_invalid_data;
+      if (options->use_src_clip_rectangle) {
+        memcpy(&src_clip_rectangle, &options->src_clip_rectangle,
+               sizeof(options->src_clip_rectangle));
       }
-      result.metadata_iccp_ptr = sp;
-      result.metadata_iccp_len = payload_len;
-
-    } else if (chunk_type == 0x46495845) {  // "EXIF"le.
-      if (result.metadata_exif_ptr) {
-        goto fail_invalid_data;
+      if ((-0xFFFFFF <= options->offset_x) && (options->offset_x <= 0xFFFFFF) &&
+          (-0xFFFFFF <= options->offset_y) && (options->offset_y <= 0xFFFFFF)) {
+        offset_x = options->offset_x;
+        offset_y = options->offset_y;
+      } else {
+        dst_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
+        src_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
       }
-      result.metadata_exif_ptr = sp;
-      result.metadata_exif_len = payload_len;
-
-    } else if (chunk_type == 0x20504D58) {  // "XMP "le.
-      if (result.metadata_xmp_ptr) {
-        goto fail_invalid_data;
-      }
-      result.metadata_xmp_ptr = sp;
-      result.metadata_xmp_len = payload_len;
     }
 
-    sp += payload_len;
-    sn -= payload_len;
-  }
+    if ((src_len < 44) ||
+        (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
+      return qoir_private_make_decode_result_error(
+          qoir_status_message__error_invalid_data);
+    }
+    uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
+    if ((qoir_chunk_payload_len < 8) ||
+        (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
+        (qoir_chunk_payload_len > (src_len - 44))) {
+      return qoir_private_make_decode_result_error(
+          qoir_status_message__error_invalid_data);
+    }
 
-  if (!seen_qpix) {
-    goto fail_invalid_data;
-  }
-  return result;
+    uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
+    uint32_t width_in_pixels = 0xFFFFFF & header0;
+    qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
+    switch (src_pixfmt) {
+      case QOIR_PIXEL_FORMAT__BGRX:
+      case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+      case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+        break;
+      default:
+        goto fail_invalid_data;
+    }
+    uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
+    uint32_t height_in_pixels = 0xFFFFFF & header1;
+    uint32_t lossiness = 0x07 & (header1 >> 24);
+
+    qoir_pixel_format dst_pixfmt =
+        (options && !qoir_pixel_buffer__is_zero(options->pixbuf))
+            ? options->pixbuf.pixcfg.pixfmt
+            : ((options && options->pixfmt)
+                   ? options->pixfmt
+                   : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL);
+    uint64_t dst_width_in_bytes =
+        width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+
+    bool seen_qpix = false;
+    const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_len);
+    size_t sn = src_len - (12 + qoir_chunk_payload_len);
+    while (1) {
+      if (sn < 12) {
+        goto fail_invalid_data;
+      }
+      uint32_t chunk_type = qoir_private_peek_u32le(sp + 0);
+      uint64_t payload_len = qoir_private_peek_u64le(sp + 4);
+      if (payload_len > 0x7FFFFFFFFFFFFFFFull) {
+        goto fail_invalid_data;
+      }
+      sp += 12;
+      sn -= 12;
+
+      if (chunk_type == 0x52494F51) {  // "QOIR"le.
+        goto fail_invalid_data;
+      } else if (chunk_type == 0x444E4551) {  // "QEND"le.
+        if ((payload_len != 0) || (sn != 0)) {
+          goto fail_invalid_data;
+        }
+        break;
+      }
+
+      // This chunk must be followed by at least the QEND chunk (12 bytes).
+      if ((sn < payload_len) || ((sn - payload_len) < 12)) {
+        goto fail_invalid_data;
+      }
+
+      if (chunk_type == 0x58495051) {  // "QPIX"le.
+        if (seen_qpix) {
+          goto fail_invalid_data;
+        }
+        seen_qpix = true;
+
+        uint64_t pixbuf_len = dst_width_in_bytes * (uint64_t)height_in_pixels;
+        if (pixbuf_len > SIZE_MAX) {
+          return qoir_private_make_decode_result_error(
+              qoir_status_message__error_unsupported_pixbuf_dimensions);
+
+        } else if (pixbuf_len > 0) {
+          if (qoir_pixel_buffer__is_zero(result.dst_pixbuf)) {
+            result.owned_memory = QOIR_MALLOC((size_t)pixbuf_len);
+            if (!result.owned_memory) {
+              return qoir_private_make_decode_result_error(
+                  qoir_status_message__error_out_of_memory);
+            }
+            if (options && (options->use_dst_clip_rectangle ||
+                            options->use_src_clip_rectangle)) {
+              memset(result.owned_memory, 0, pixbuf_len);
+            }
+            result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
+            result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
+            result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
+            result.dst_pixbuf.data = (uint8_t*)result.owned_memory;
+            result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
+          }
+          qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
+          bool free_decbuf = false;
+          if (!decbuf) {
+            decbuf =
+                (qoir_decode_buffer*)QOIR_MALLOC(sizeof(qoir_decode_buffer));
+            if (!decbuf) {
+              QOIR_FREE(result.owned_memory);
+              return qoir_private_make_decode_result_error(
+                  qoir_status_message__error_out_of_memory);
+            }
+            free_decbuf = true;
+          }
+          const char* status_message = qoir_private_decode_qpix_payload(
+              decbuf, result.dst_pixbuf, dst_clip_rectangle, src_pixfmt,
+              width_in_pixels, height_in_pixels, sp,
+              payload_len + 8,  // See § for +8.
+              src_clip_rectangle, offset_x, offset_y, lossiness);
+          if (free_decbuf) {
+            QOIR_FREE(decbuf);
+          }
+          if (status_message) {
+            QOIR_FREE(result.owned_memory);
+            return qoir_private_make_decode_result_error(status_message);
+          }
+
+        } else if (payload_len != 0) {
+          goto fail_invalid_data;
+        }
+
+      } else if (chunk_type == 0x50434943) {  // "CICP"le.
+        if (result.metadata_cicp_ptr) {
+          goto fail_invalid_data;
+        }
+        result.metadata_cicp_ptr = sp;
+        result.metadata_cicp_len = payload_len;
+
+      } else if (chunk_type == 0x50434349) {  // "ICCP"le.
+        if (result.metadata_iccp_ptr) {
+          goto fail_invalid_data;
+        }
+        result.metadata_iccp_ptr = sp;
+        result.metadata_iccp_len = payload_len;
+
+      } else if (chunk_type == 0x46495845) {  // "EXIF"le.
+        if (result.metadata_exif_ptr) {
+          goto fail_invalid_data;
+        }
+        result.metadata_exif_ptr = sp;
+        result.metadata_exif_len = payload_len;
+
+      } else if (chunk_type == 0x20504D58) {  // "XMP "le.
+        if (result.metadata_xmp_ptr) {
+          goto fail_invalid_data;
+        }
+        result.metadata_xmp_ptr = sp;
+        result.metadata_xmp_len = payload_len;
+      }
+
+      sp += payload_len;
+      sn -= payload_len;
+    }
+
+    if (!seen_qpix) {
+      goto fail_invalid_data;
+    }
+    return result;
+  } while (false);
 
 fail_invalid_data:
   QOIR_FREE(result.owned_memory);
@@ -6857,7 +6871,8 @@ qoir_encode(                              //
         qoir_status_message__error_unsupported_pixbuf_dimensions;
     return result;
   }
-  uint8_t* const original_dst_ptr = QOIR_MALLOC((size_t)dst_len_worst_case);
+  uint8_t* const original_dst_ptr =
+      (uint8_t*)QOIR_MALLOC((size_t)dst_len_worst_case);
   if (!original_dst_ptr) {
     result.status_message = qoir_status_message__error_out_of_memory;
     return result;
