@@ -484,2243 +484,6 @@ qoir_encode(                              //
 
 // ================================ +Private Implementation
 
-#if defined(QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY)
-#include <limits.h>
-#include <lz4.h>
-#endif
-
-// This implementation assumes that:
-//  - converting a uint32_t to a size_t will never overflow.
-//  - converting a size_t to a uint64_t will never overflow.
-#if defined(__WORDSIZE)
-#if (__WORDSIZE != 32) && (__WORDSIZE != 64)
-#error "qoir.h requires a word size of either 32 or 64 bits"
-#endif
-#endif
-
-#if defined(__GNUC__)
-#define QOIR_ALWAYS_INLINE inline __attribute__((__always_inline__))
-#elif defined(_MSC_VER)
-#define QOIR_ALWAYS_INLINE __forceinline
-#else
-#define QOIR_ALWAYS_INLINE inline
-#endif
-
-#if !defined(QOIR_CONFIG__DISABLE_SIMD)
-#if (defined(__GNUC__) && defined(__x86_64__)) || \
-    (defined(_MSC_VER) && defined(_M_X64))
-#define QOIR_USE_SIMD_SSE2
-#include <emmintrin.h>
-#endif
-#endif
-
-// Normally, the qoir_private_peek_etc and qoir_private_poke_etc
-// implementations are both (1) correct regardless of CPU endianness and (2)
-// very fast (e.g. an inlined qoir_private_peek_u32le call, in an optimized
-// clang or gcc build, is a single MOV instruction on x86_64).
-//
-// However, the endian-agnostic implementations are slow on Microsoft's C
-// compiler (MSC). Alternative memcpy-based implementations restore speed, but
-// they are only correct on little-endian CPU architectures. Defining
-// QOIR_USE_MEMCPY_LE_PEEK_POKE opts in to these implementations.
-//
-// https://godbolt.org/z/q4MfjzTPh
-#if defined(_MSC_VER) && !defined(__clang__) && \
-    (defined(_M_ARM64) || defined(_M_X64))
-#define QOIR_USE_MEMCPY_LE_PEEK_POKE
-#endif
-
-static inline uint32_t    //
-qoir_private_peek_u32le(  //
-    const uint8_t* p) {
-#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
-  uint32_t x;
-  memcpy(&x, p, 4);
-  return x;
-#else
-  return ((uint32_t)(p[0]) << 0) | ((uint32_t)(p[1]) << 8) |
-         ((uint32_t)(p[2]) << 16) | ((uint32_t)(p[3]) << 24);
-#endif
-}
-
-static inline uint64_t    //
-qoir_private_peek_u64le(  //
-    const uint8_t* p) {
-#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
-  uint64_t x;
-  memcpy(&x, p, 8);
-  return x;
-#else
-  return ((uint64_t)(p[0]) << 0) | ((uint64_t)(p[1]) << 8) |
-         ((uint64_t)(p[2]) << 16) | ((uint64_t)(p[3]) << 24) |
-         ((uint64_t)(p[4]) << 32) | ((uint64_t)(p[5]) << 40) |
-         ((uint64_t)(p[6]) << 48) | ((uint64_t)(p[7]) << 56);
-#endif
-}
-
-static inline void        //
-qoir_private_poke_u32le(  //
-    uint8_t* p,           //
-    uint32_t x) {
-#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
-  memcpy(p, &x, 4);
-#else
-  p[0] = (uint8_t)(x >> 0);
-  p[1] = (uint8_t)(x >> 8);
-  p[2] = (uint8_t)(x >> 16);
-  p[3] = (uint8_t)(x >> 24);
-#endif
-}
-
-static inline void        //
-qoir_private_poke_u64le(  //
-    uint8_t* p,           //
-    uint64_t x) {
-#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
-  memcpy(p, &x, 8);
-#else
-  p[0] = (uint8_t)(x >> 0);
-  p[1] = (uint8_t)(x >> 8);
-  p[2] = (uint8_t)(x >> 16);
-  p[3] = (uint8_t)(x >> 24);
-  p[4] = (uint8_t)(x >> 32);
-  p[5] = (uint8_t)(x >> 40);
-  p[6] = (uint8_t)(x >> 48);
-  p[7] = (uint8_t)(x >> 56);
-#endif
-}
-
-static inline bool              //
-qoir_private_u64_overflow_add(  //
-    uint64_t* x,                //
-    uint64_t y) {
-  uint64_t old = *x;
-  *x += y;
-  return *x < old;
-}
-
-static uint8_t qoir_private_table_noise[16][16];
-static uint8_t qoir_private_table_unlossify[7][256];
-#if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
-static uint8_t qoir_private_table_luma[65536];
-#endif
-
-static inline uint32_t        //
-qoir_private_tile_dimension(  //
-    bool interior,            //
-    uint32_t pixel_dimension) {
-  return interior ? QOIR_TILE_SIZE
-                  : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
-}
-
-// QOIR_TILE_LZ4_COMPRESSION_WORST_CASE equals
-// qoir_lz4_block_encode_worst_case_dst_len(4 * QTS * QTS).
-#define QOIR_TILE_LZ4_COMPRESSION_WORST_CASE \
-  ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) +   \
-   ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) / 255) + 16)
-
-// -------- SWAR (SIMD Within a Register)
-
-// These treat a u32 as a u8x4 vector.
-
-// QOIR_SWAR_PADDB returns (a + b).
-#define QOIR_SWAR_PADDB(a, b) \
-  (((a & 0x7F7F7F7F) + (b & 0x7F7F7F7F)) ^ ((a ^ b) & 0x80808080))
-
-// QOIR_SWAR_PSUBB returns (a - b).
-#define QOIR_SWAR_PSUBB(a, b) \
-  ((a | 0x80808080) - (b & 0x7F7F7F7F)) ^ ((a ^ ~b) & 0x80808080)
-
-// -------- Memory Management
-
-#define QOIR_MALLOC(len)                                                \
-  qoir_private_malloc(options ? options->contextual_malloc_func : NULL, \
-                      options ? options->memory_func_context : NULL, len)
-
-#define QOIR_FREE(ptr)                                              \
-  qoir_private_free(options ? options->contextual_free_func : NULL, \
-                    options ? options->memory_func_context : NULL, ptr)
-
-static inline void*                                  //
-qoir_private_malloc(                                 //
-    void* (*contextual_malloc_func)(void*, size_t),  //
-    void* memory_func_context,                       //
-    size_t len) {
-  if (contextual_malloc_func) {
-    return (*contextual_malloc_func)(memory_func_context, len);
-  }
-  return malloc(len);
-}
-
-static inline void                               //
-qoir_private_free(                               //
-    void (*contextual_free_func)(void*, void*),  //
-    void* memory_func_context,                   //
-    void* ptr) {
-  if (contextual_free_func) {
-    (*contextual_free_func)(memory_func_context, ptr);
-    return;
-  }
-  free(ptr);
-}
-
-// -------- Status Messages
-
-const char qoir_lz4_status_message__error_dst_is_too_short[] =  //
-    "#qoir/lz4: dst is too short";
-const char qoir_lz4_status_message__error_invalid_data[] =  //
-    "#qoir/lz4: invalid data";
-const char qoir_lz4_status_message__error_src_is_too_long[] =  //
-    "#qoir/lz4: src is too long";
-
-const char qoir_status_message__error_invalid_argument[] =  //
-    "#qoir: invalid argument";
-const char qoir_status_message__error_invalid_data[] =  //
-    "#qoir: invalid data";
-const char qoir_status_message__error_out_of_memory[] =  //
-    "#qoir: out of memory";
-const char qoir_status_message__error_unsupported_metadata_size[] =  //
-    "#qoir: unsupported metadata size";
-const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
-    "#qoir: unsupported pixbuf dimensions";
-const char qoir_status_message__error_unsupported_pixfmt[] =  //
-    "#qoir: unsupported pixfmt";
-const char qoir_status_message__error_unsupported_tile_format[] =  //
-    "#qoir: unsupported tile format";
-
-// -------- Pixel Swizzlers
-
-// The DST and SRC in qoir_private_swizzle__DST__SRC means:
-//  - bgr,  rgb  = 3 bytes per pixel, opaque.
-//  - bgra, rgba = 4 bytes per pixel, some sort of alpha.
-//  - bgrn, rgbn = 4 bytes per pixel, nonpremultiplied alpha.
-//  - bgrp, rgbp = 4 bytes per pixel, premultiplied alpha.
-//  - bgrx, rgbx = 4 bytes per pixel, opaque (every 4th byte is ignored).
-//
-// As for bgr versus rgb, letter order matches in-memory byte order,
-// independent of endianness.
-//
-// Unlike PNG, it's always 8 bits per channel, in memory. No more, no less.
-// However, when converting between nonpremultiplied and premultiplied alpha,
-// the computation happens in 16-bit space (and hence the multiplication by one
-// or two factors of 0x101).
-//
-// Working in the higher bit depth can produce slightly different (and arguably
-// slightly more accurate) results. For example, given 8-bit blue and alpha of
-// 0x80 and 0x81:
-//
-//  - ((0x80   * 0x81  ) / 0xFF  )      = 0x40        = 0x40
-//  - ((0x8080 * 0x8181) / 0xFFFF) >> 8 = 0x4101 >> 8 = 0x41
-
-typedef void (*qoir_private_swizzle_func)(  //
-    uint8_t* QOIR_RESTRICT dst_ptr,         //
-    size_t dst_stride_in_bytes,             //
-    const uint8_t* QOIR_RESTRICT src_ptr,   //
-    size_t src_stride_in_bytes,             //
-    size_t width_in_pixels,                 //
-    size_t height_in_pixels);
-
-static void                                //
-qoir_private_swizzle__copy_4(              //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  size_t n = 4 * width_in_pixels;
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    memcpy(dst_ptr, src_ptr, n);
-    dst_ptr += dst_stride_in_bytes;
-    src_ptr += src_stride_in_bytes;
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgr__bgrn(           //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
-      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
-    }
-    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgr__bgrp(           //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      src_ptr++;
-      *dst_ptr++ = s0;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s2;
-    }
-    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgr__rgbn(           //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
-      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
-    }
-    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgr__rgbp(           //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      src_ptr++;
-      *dst_ptr++ = s2;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s0;
-    }
-    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgra__bgr(           //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      *dst_ptr++ = s0;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s2;
-      *dst_ptr++ = 0xFF;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgra__bgrx(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      src_ptr++;
-      *dst_ptr++ = s0;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s2;
-      *dst_ptr++ = 0xFF;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgra__rgb(           //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      *dst_ptr++ = s2;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s0;
-      *dst_ptr++ = 0xFF;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgra__rgba(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      *dst_ptr++ = s2;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s0;
-      *dst_ptr++ = s3;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgra__rgbx(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      src_ptr++;
-      *dst_ptr++ = s2;
-      *dst_ptr++ = s1;
-      *dst_ptr++ = s0;
-      *dst_ptr++ = 0xFF;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgrn__bgrp(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      if (s3 == 0xFF) {
-        *dst_ptr++ = s0;
-        *dst_ptr++ = s1;
-        *dst_ptr++ = s2;
-        *dst_ptr++ = s3;
-      } else if (s3 == 0x00) {
-        *dst_ptr++ = 0x00;
-        *dst_ptr++ = 0x00;
-        *dst_ptr++ = 0x00;
-        *dst_ptr++ = 0x00;
-      } else {
-        const uint32_t ffff_101 = 0xFFFF * 0x101;
-        uint32_t alpha_101 = (uint32_t)s3 * 0x101;
-        *dst_ptr++ = (uint8_t)(((s0 * ffff_101) / alpha_101) >> 8);
-        *dst_ptr++ = (uint8_t)(((s1 * ffff_101) / alpha_101) >> 8);
-        *dst_ptr++ = (uint8_t)(((s2 * ffff_101) / alpha_101) >> 8);
-        *dst_ptr++ = s3;
-      }
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgrn__rgbp(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      if (s3 == 0xFF) {
-        *dst_ptr++ = s0;
-        *dst_ptr++ = s1;
-        *dst_ptr++ = s2;
-        *dst_ptr++ = s3;
-      } else if (s3 == 0x00) {
-        *dst_ptr++ = 0x00;
-        *dst_ptr++ = 0x00;
-        *dst_ptr++ = 0x00;
-        *dst_ptr++ = 0x00;
-      } else {
-        const uint32_t ffff_101 = 0xFFFF * 0x101;
-        uint32_t alpha_101 = (uint32_t)s3 * 0x101;
-        *dst_ptr++ = (uint8_t)(((s2 * ffff_101) / alpha_101) >> 8);
-        *dst_ptr++ = (uint8_t)(((s1 * ffff_101) / alpha_101) >> 8);
-        *dst_ptr++ = (uint8_t)(((s0 * ffff_101) / alpha_101) >> 8);
-        *dst_ptr++ = s3;
-      }
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgrp__bgrn(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
-      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = s3;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-static void                                //
-qoir_private_swizzle__bgrp__rgbn(          //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_stride_in_bytes,            //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_stride_in_bytes,            //
-    size_t width_in_pixels,                //
-    size_t height_in_pixels) {
-  for (; height_in_pixels > 0; height_in_pixels--) {
-    for (size_t n = width_in_pixels; n > 0; n--) {
-      uint8_t s0 = *src_ptr++;
-      uint8_t s1 = *src_ptr++;
-      uint8_t s2 = *src_ptr++;
-      uint8_t s3 = *src_ptr++;
-      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
-      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
-      *dst_ptr++ = s3;
-    }
-    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
-    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
-  }
-}
-
-// -------- LZ4 Decode
-
-QOIR_MAYBE_STATIC qoir_size_result         //
-qoir_lz4_block_decode(                     //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_len,                        //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_len) {
-  qoir_size_result result = {0};
-
-  if (src_len > QOIR_LZ4_BLOCK_DECODE_MAX_INCL_SRC_LEN) {
-    result.status_message = qoir_lz4_status_message__error_src_is_too_long;
-    return result;
-  }
-
-#if defined(QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY)
-  int n =
-      LZ4_decompress_safe((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
-                          ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
-  if (n < 0) {
-    result.status_message = qoir_lz4_status_message__error_invalid_data;
-    return result;
-  }
-  result.value = n;
-  return result;
-
-#else
-  uint8_t* const original_dst_ptr = dst_ptr;
-
-  // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for file
-  // format details, such as the LZ4 token's bit patterns.
-  while (src_len > 0) {
-    uint32_t token = *src_ptr++;
-    src_len--;
-
-    uint32_t literal_len = token >> 4;
-    if (literal_len > 0) {
-      if (literal_len == 15) {
-        while (1) {
-          if (src_len == 0) {
-            goto fail_invalid_data;
-          }
-          uint32_t s = *src_ptr++;
-          src_len--;
-          literal_len += s;
-          if (s != 255) {
-            break;
-          }
-        }
-      }
-
-      if (literal_len > src_len) {
-        goto fail_invalid_data;
-      } else if (literal_len > dst_len) {
-        result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
-        return result;
-      }
-      memcpy(dst_ptr, src_ptr, literal_len);
-      dst_ptr += literal_len;
-      dst_len -= literal_len;
-      src_ptr += literal_len;
-      src_len -= literal_len;
-      if (src_len == 0) {
-        result.value = ((size_t)(dst_ptr - original_dst_ptr));
-        return result;
-      }
-    }
-
-    if (src_len < 2) {
-      goto fail_invalid_data;
-    }
-    uint32_t copy_off = ((uint32_t)src_ptr[0]) | (((uint32_t)src_ptr[1]) << 8);
-    src_ptr += 2;
-    src_len -= 2;
-    if ((copy_off == 0) ||  //
-        (copy_off > ((size_t)(dst_ptr - original_dst_ptr)))) {
-      goto fail_invalid_data;
-    }
-
-    uint32_t copy_len = (token & 15) + 4;
-    if (copy_len == 19) {
-      while (1) {
-        if (src_len == 0) {
-          goto fail_invalid_data;
-        }
-        uint32_t s = *src_ptr++;
-        src_len--;
-        copy_len += s;
-        if (s != 255) {
-          break;
-        }
-      }
-    }
-
-    if (dst_len < copy_len) {
-      result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
-      return result;
-    }
-    dst_len -= copy_len;
-    for (const uint8_t* from = dst_ptr - copy_off; copy_len > 0; copy_len--) {
-      *dst_ptr++ = *from++;
-    }
-  }
-
-fail_invalid_data:
-  result.status_message = qoir_lz4_status_message__error_invalid_data;
-  return result;
-#endif  // QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
-}
-
-// -------- LZ4 Encode
-
-#define QOIR_LZ4_HASH_TABLE_SHIFT 12
-
-static inline uint32_t  //
-qoir_lz4_private_hash(  //
-    uint32_t x) {
-  // 2654435761u is Knuth's magic constant.
-  return (x * 2654435761u) >> (32 - QOIR_LZ4_HASH_TABLE_SHIFT);
-}
-
-static inline size_t                     //
-qoir_lz4_private_longest_common_prefix(  //
-    const uint8_t* p,                    //
-    const uint8_t* q,                    //
-    const uint8_t* p_limit) {
-  const uint8_t* const original_p = p;
-  size_t n = p_limit - p;
-  while ((n >= 4) &&
-         (qoir_private_peek_u32le(p) == qoir_private_peek_u32le(q))) {
-    p += 4;
-    q += 4;
-    n -= 4;
-  }
-  while ((n > 0) && (*p == *q)) {
-    p += 1;
-    q += 1;
-    n -= 1;
-  }
-  return (size_t)(p - original_p);
-}
-
-QOIR_MAYBE_STATIC qoir_size_result         //
-qoir_lz4_block_encode_worst_case_dst_len(  //
-    size_t src_len) {
-  qoir_size_result result = {0};
-
-  if (src_len > QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN) {
-    result.status_message = qoir_lz4_status_message__error_src_is_too_long;
-    return result;
-  }
-  // For the curious, if (src_len <= 0x7E000000) then (value <= 0x7E7E7E8E).
-  result.value = src_len + (src_len / 255) + 16;
-  return result;
-}
-
-QOIR_MAYBE_STATIC qoir_size_result         //
-qoir_lz4_block_encode(                     //
-    uint8_t* QOIR_RESTRICT dst_ptr,        //
-    size_t dst_len,                        //
-    const uint8_t* QOIR_RESTRICT src_ptr,  //
-    size_t src_len) {
-  // This function does not switch on QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY.
-  // We'd like the encoder's output to be the same regardless of configuration.
-
-  qoir_size_result result = qoir_lz4_block_encode_worst_case_dst_len(src_len);
-  if (result.status_message) {
-    return result;
-  } else if (result.value > dst_len) {
-    result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
-    result.value = 0;
-    return result;
-  }
-  result.value = 0;
-
-  uint8_t* dp = dst_ptr;
-  const uint8_t* sp = src_ptr;
-  const uint8_t* literal_start = src_ptr;
-
-  // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for "The
-  // last match must start at least 12 bytes before the end of block" and other
-  // file format details, such as the LZ4 token's bit patterns.
-  if (src_len > 12) {
-    const uint8_t* const match_limit = src_ptr + src_len - 5;
-    const size_t final_literals_limit = src_len - 11;
-
-    // hash_table maps from QOIR_LZ4_HASH_TABLE_SHIFT-bit keys to 32-bit
-    // values. Each value is an offset o, relative to src_ptr, initialized to
-    // zero. Each key, when set, is a hash of 4 bytes src_ptr[o .. o+4].
-    uint32_t hash_table[1 << QOIR_LZ4_HASH_TABLE_SHIFT] = {0};
-
-    while (1) {
-      // Start with 1-byte steps, accelerating when not finding any matches
-      // (e.g. when compressing binary data, not text data).
-      size_t step = 1;
-      size_t step_counter = 1 << 6;
-
-      // Start with a non-empty literal.
-      const uint8_t* next_sp = sp + 1;
-      uint32_t next_hash =
-          qoir_lz4_private_hash(qoir_private_peek_u32le(next_sp));
-
-      // Find a match or goto final_literals.
-      const uint8_t* match = NULL;
-      do {
-        sp = next_sp;
-        next_sp += step;
-        step = step_counter++ >> 6;
-        if ((next_sp - src_ptr) > final_literals_limit) {
-          goto final_literals;
-        }
-        uint32_t* hash_table_entry = &hash_table[next_hash];
-        match = src_ptr + *hash_table_entry;
-        next_hash = qoir_lz4_private_hash(qoir_private_peek_u32le(next_sp));
-        *hash_table_entry = (uint32_t)(sp - src_ptr);
-      } while (((sp - match) > 0xFFFF) ||
-               (qoir_private_peek_u32le(sp) != qoir_private_peek_u32le(match)));
-
-      // Extend the match backwards.
-      while ((sp > literal_start) && (match > src_ptr) &&
-             (sp[-1] == match[-1])) {
-        sp--;
-        match--;
-      }
-
-      // Emit half of the LZ4 token, encoding the literal length. We'll fix up
-      // the other half later.
-      uint8_t* token = dp;
-      size_t literal_len = (size_t)(sp - literal_start);
-      if (literal_len < 15) {
-        *dp++ = (uint8_t)(literal_len << 4);
-      } else {
-        size_t n = literal_len - 15;
-        *dp++ = 0xF0;
-        for (; n >= 255; n -= 255) {
-          *dp++ = 0xFF;
-        }
-        *dp++ = (uint8_t)n;
-      }
-      memcpy(dp, literal_start, literal_len);
-      dp += literal_len;
-
-      while (1) {
-        // At this point:
-        //  - sp    points to the start of the match's later   copy.
-        //  - match points to the start of the match's earlier copy.
-        //  - token points to the LZ4 token.
-
-        // Calculate the match length and update the token's other half.
-        size_t copy_off = (size_t)(sp - match);
-        *dp++ = (uint8_t)(copy_off >> 0);
-        *dp++ = (uint8_t)(copy_off >> 8);
-        size_t adj_copy_len = qoir_lz4_private_longest_common_prefix(
-            4 + sp, 4 + match, match_limit);
-        if (adj_copy_len < 15) {
-          *token |= (uint8_t)adj_copy_len;
-        } else {
-          size_t n = adj_copy_len - 15;
-          *token |= 0x0F;
-          for (; n >= 255; n -= 255) {
-            *dp++ = 0xFF;
-          }
-          *dp++ = (uint8_t)n;
-        }
-        sp += 4 + adj_copy_len;
-
-        // Update the literal_start and check the final_literals_limit.
-        literal_start = sp;
-        if ((sp - src_ptr) >= final_literals_limit) {
-          goto final_literals;
-        }
-
-        // We've skipped over hashing everything within the match. Also, the
-        // minimum match length is 4. Update the hash table for one of those
-        // skipped positions.
-        hash_table[qoir_lz4_private_hash(qoir_private_peek_u32le(sp - 2))] =
-            (uint32_t)(sp - 2 - src_ptr);
-
-        // Check if this match can be followed immediately by another match.
-        // If so, continue the loop. Otherwise, break.
-        uint32_t* hash_table_entry =
-            &hash_table[qoir_lz4_private_hash(qoir_private_peek_u32le(sp))];
-        uint32_t old_offset = *hash_table_entry;
-        uint32_t new_offset = (uint32_t)(sp - src_ptr);
-        *hash_table_entry = new_offset;
-        match = src_ptr + old_offset;
-        if (((new_offset - old_offset) > 0xFFFF) ||
-            (qoir_private_peek_u32le(sp) != qoir_private_peek_u32le(match))) {
-          break;
-        }
-        token = dp++;
-        *token = 0;
-      }
-    }
-  }
-
-final_literals:
-  do {
-    size_t final_literal_len = src_len - (size_t)(literal_start - src_ptr);
-    if (final_literal_len < 15) {
-      *dp++ = (uint8_t)(final_literal_len << 4);
-    } else {
-      size_t n = final_literal_len - 15;
-      *dp++ = 0xF0;
-      for (; n >= 255; n -= 255) {
-        *dp++ = 0xFF;
-      }
-      *dp++ = (uint8_t)n;
-    }
-    memcpy(dp, literal_start, final_literal_len);
-    dp += final_literal_len;
-  } while (0);
-
-  result.value = (size_t)(dp - dst_ptr);
-  return result;
-}
-
-// -------- QOIR Decode
-
-QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
-qoir_decode_pixel_configuration(                          //
-    const uint8_t* src_ptr,                               //
-    size_t src_len) {
-  qoir_decode_pixel_configuration_result result = {0};
-
-  if ((src_len < 20) ||
-      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
-    result.status_message = qoir_status_message__error_invalid_data;
-    return result;
-  }
-  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
-  if ((qoir_chunk_payload_len < 8) ||
-      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull)) {
-    result.status_message = qoir_status_message__error_invalid_data;
-    return result;
-  }
-
-  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
-  uint32_t width_in_pixels = 0xFFFFFF & header0;
-  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
-  switch (src_pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-      break;
-    default:
-      result.status_message = qoir_status_message__error_invalid_data;
-      return result;
-  }
-  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
-  uint32_t height_in_pixels = 0xFFFFFF & header1;
-
-  result.dst_pixcfg.pixfmt = src_pixfmt;
-  result.dst_pixcfg.width_in_pixels = width_in_pixels;
-  result.dst_pixcfg.height_in_pixels = height_in_pixels;
-  return result;
-}
-
-static qoir_private_swizzle_func          //
-qoir_private_choose_decode_swizzle_func(  //
-    qoir_pixel_format dst_pixfmt,         //
-    qoir_pixel_format src_pixfmt) {
-  switch (dst_pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__copy_4;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgrp__bgrn;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__copy_4;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgra__bgrx;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__copy_4;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__bgrn__bgrp;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgra__bgrx;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgrp__bgrn;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__copy_4;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__BGR:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgr__bgrp;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgr__bgrn;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__bgr__bgrp;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__RGBX:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgra__rgba;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgrp__rgbn;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__bgra__rgba;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgra__rgbx;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgra__rgba;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__bgrn__rgbp;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgra__rgbx;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgrp__rgbn;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__bgra__rgba;
-      }
-      break;
-
-    case QOIR_PIXEL_FORMAT__RGB:
-      switch (src_pixfmt) {
-        case QOIR_PIXEL_FORMAT__BGRX:
-          return qoir_private_swizzle__bgr__rgbp;
-        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-          return qoir_private_swizzle__bgr__rgbn;
-        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-          return qoir_private_swizzle__bgr__rgbp;
-      }
-      break;
-  }
-
-  return NULL;
-}
-
-// Callers should pass (QOIR_LITERALS_PRE_PADDING + (4 * tw * th)) for dst_len,
-// so that the decode loop can always refer (by a simple offset of -4) to the
-// pixel left of the current pixel.
-//
-// Callers should pass (opcode_stream_length + 8) for src_len so that the
-// decode loop can always peek for 8 bytes, even at the end of the stream.
-// Reference: §
-static qoir_size_result            //
-qoir_private_decode_tile_opcodes(  //
-    uint8_t* dst_ptr,              //
-    size_t dst_len,                //
-    const uint8_t* src_ptr,        //
-    size_t src_len) {
-  qoir_size_result result = {0};
-
-  if ((dst_len < QOIR_LITERALS_PRE_PADDING) || (src_len < 8)) {
-    result.status_message = qoir_status_message__error_invalid_argument;
-    return result;
-  }
-
-  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
-  // for performance. It is always indexed by a uint8_t value that is a
-  // multiple of four. The four uint8_t elements are in B, G, R, A order.
-  uint8_t color_cache[256];
-  for (int i = 0; i < 256; i += 4) {
-    color_cache[i + 0] = 0x00;
-    color_cache[i + 1] = 0x00;
-    color_cache[i + 2] = 0x00;
-    color_cache[i + 3] = 0xFF;
-  }
-  uint8_t next_color_index = 0;
-
-  uint8_t* dp = dst_ptr + QOIR_LITERALS_PRE_PADDING;
-  uint8_t* dq = dst_ptr + dst_len;
-  const uint8_t* sp = src_ptr;
-  const uint8_t* sq = src_ptr + src_len - 8;
-  while (dp < dq) {
-    if (sp >= sq) {
-      result.status_message = qoir_status_message__error_invalid_data;
-      return result;
-    }
-
-    uint8_t pixel[4];
-    memcpy(pixel, dp - 4, 4);
-
-    uint64_t s64 = qoir_private_peek_u64le(sp);
-    if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_BGR8
-      pixel[0] += (uint8_t)(s64 >> 0x08);
-      pixel[1] += (uint8_t)(s64 >> 0x10);
-      pixel[2] += (uint8_t)(s64 >> 0x18);
-      sp += 4;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0x03) == 0) {  // QOIR_OP_INDEX
-      sp += 1;
-      memcpy(pixel, color_cache + (uint8_t)s64, 4);
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0x03) == 1) {  // QOIR_OP_BGR2
-      uint32_t delta8x4 = (uint32_t)(((s64 >> 0x02) & 0x000003) |  //
-                                     ((s64 << 0x04) & 0x000300) |  //
-                                     ((s64 << 0x0A) & 0x030000));
-      delta8x4 = QOIR_SWAR_PSUBB(delta8x4, 0x020202);
-      uint32_t pixel8x4;
-      memcpy(&pixel8x4, pixel, 4);
-#if defined(QOIR_USE_SIMD_SSE2)
-      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
-          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
-#else
-      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
-#endif
-      memcpy(pixel, &pixel8x4, 4);
-
-      sp += 1;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0x03) == 2) {  // QOIR_OP_LUMA
-#if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
-      uint32_t delta8x4;
-      memcpy(&delta8x4, qoir_private_table_luma - 2 + (uint16_t)s64, 4);
-      uint32_t pixel8x4;
-      memcpy(&pixel8x4, pixel, 4);
-#if defined(QOIR_USE_SIMD_SSE2)
-      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
-          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
-#else
-      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
-#endif
-      memcpy(pixel, &pixel8x4, 4);
-#else
-      uint8_t delta_g = ((uint8_t)s64 >> 0x02) - 32;
-      pixel[0] += delta_g - 8 + ((s64 >> 0x08) & 0x0F);
-      pixel[1] += delta_g;
-      pixel[2] += delta_g - 8 + ((s64 >> 0x0C) & 0x0F);
-#endif
-      sp += 2;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0x07) == 3) {  // QOIR_OP_BGR7
-      uint32_t delta8x4 = (uint32_t)((((s64 >> 0x03) - 0x000040) & 0x00007F) |
-                                     (((s64 >> 0x02) - 0x004000) & 0x007F00) |
-                                     (((s64 >> 0x01) - 0x400000) & 0x7F0000));
-      delta8x4 |= (delta8x4 & 0x404040) << 1;
-      uint32_t pixel8x4;
-      memcpy(&pixel8x4, pixel, 4);
-#if defined(QOIR_USE_SIMD_SSE2)
-      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
-          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
-#else
-      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
-#endif
-      memcpy(pixel, &pixel8x4, 4);
-      sp += 3;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0xFF) < 0xD7) {  // QOIR_OP_RUNS
-      size_t run_length = (s64 & 0xFF) >> 0x03;
-      if ((dq - dp) < (4 * (run_length + 1))) {
-        result.status_message = qoir_status_message__error_invalid_data;
-        return result;
-      }
-      do {
-        memcpy(dp, pixel, 4);
-        dp += 4;
-      } while (run_length--);
-      sp += 1;
-
-    } else if ((s64 & 0xFF) == 0xD7) {  // QOIR_OP_RUNL
-      size_t run_length = (s64 >> 0x08) & 0xFF;
-      if ((dq - dp) < (4 * (run_length + 1))) {
-        result.status_message = qoir_status_message__error_invalid_data;
-        return result;
-      }
-      do {
-        memcpy(dp, pixel, 4);
-        dp += 4;
-      } while (run_length--);
-      sp += 2;
-
-    } else if ((s64 & 0xFF) == 0xDF) {  // QOIR_OP_BGRA2
-      pixel[0] += ((s64 >> 0x08) & 0x03) - 2;
-      pixel[1] += ((s64 >> 0x0A) & 0x03) - 2;
-      pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
-      pixel[3] += ((s64 >> 0x0E) & 0x03) - 2;
-      sp += 2;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0xFF) == 0xE7) {  // QOIR_OP_BGRA4
-      pixel[0] += ((s64 >> 0x08) & 0x0F) - 8;
-      pixel[1] += ((s64 >> 0x0C) & 0x0F) - 8;
-      pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
-      pixel[3] += ((s64 >> 0x14) & 0x0F) - 8;
-      sp += 3;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else if ((s64 & 0xFF) == 0xEF) {  // QOIR_OP_BGRA8
-      pixel[0] += (uint8_t)(s64 >> 0x08);
-      pixel[1] += (uint8_t)(s64 >> 0x10);
-      pixel[2] += (uint8_t)(s64 >> 0x18);
-      pixel[3] += (uint8_t)(s64 >> 0x20);
-      sp += 5;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-
-    } else {  // QOIR_OP_A8
-      pixel[3] += (uint8_t)(s64 >> 0x08);
-      sp += 2;
-      memcpy(color_cache + next_color_index, pixel, 4);
-      next_color_index += 4;
-      memcpy(dp, pixel, 4);
-      dp += 4;
-    }
-  }
-
-  if (sp != sq) {
-    result.status_message = qoir_status_message__error_invalid_data;
-    return result;
-  }
-  result.value = (size_t)(dp - dst_ptr);
-  return result;
-}
-
-static const char*                      //
-qoir_private_decode_qpix_payload(       //
-    qoir_decode_buffer* decbuf,         //
-    qoir_pixel_buffer dst_pixbuf,       //
-    qoir_rectangle dst_clip_rectangle,  //
-    qoir_pixel_format src_pixfmt,       //
-    uint32_t src_width_in_pixels,       //
-    uint32_t src_height_in_pixels,      //
-    const uint8_t* src_ptr,             //
-    size_t src_len,                     //
-    qoir_rectangle src_clip_rectangle,  //
-    int32_t offset_x,                   //
-    int32_t offset_y,                   //
-    uint32_t lossiness) {
-  qoir_rectangle dst_clip_rect =
-      qoir_make_rectangle(0, 0, (int32_t)dst_pixbuf.pixcfg.width_in_pixels,
-                          (int32_t)dst_pixbuf.pixcfg.height_in_pixels);
-  dst_clip_rect = qoir_rectangle__intersect(dst_clip_rect, dst_clip_rectangle);
-  qoir_rectangle dst_clip_rect_in_src_space;
-  dst_clip_rect_in_src_space.x0 = dst_clip_rect.x0 - offset_x;
-  dst_clip_rect_in_src_space.y0 = dst_clip_rect.y0 - offset_y;
-  dst_clip_rect_in_src_space.x1 = dst_clip_rect.x1 - offset_x;
-  dst_clip_rect_in_src_space.y1 = dst_clip_rect.y1 - offset_y;
-
-  size_t height_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
-  size_t width_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_width_in_pixels);
-  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
-    goto done;
-  }
-  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
-  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
-
-  qoir_private_swizzle_func swizzle_func =
-      qoir_private_choose_decode_swizzle_func(dst_pixbuf.pixcfg.pixfmt,
-                                              src_pixfmt);
-  if (!swizzle_func) {
-    return qoir_status_message__error_unsupported_pixfmt;
-  }
-  size_t num_dst_channels =
-      qoir_pixel_format__bytes_per_pixel(dst_pixbuf.pixcfg.pixfmt);
-
-  uint8_t* literals_pre_padding = decbuf->private_impl.literals;
-  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
-    literals_pre_padding[i + 0] = 0x00;
-    literals_pre_padding[i + 1] = 0x00;
-    literals_pre_padding[i + 2] = 0x00;
-    literals_pre_padding[i + 3] = 0xFF;
-  }
-
-  // ty, tx, tw and th are the tile's top-left offset, width and height, all
-  // measured in pixels.
-  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
-    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
-      size_t tw = qoir_private_tile_dimension(tx < tx1, src_width_in_pixels);
-      size_t th = qoir_private_tile_dimension(ty < ty1, src_height_in_pixels);
-      qoir_rectangle src_clip_rect =
-          qoir_make_rectangle((int32_t)(tx + 0), (int32_t)(ty + 0),
-                              (int32_t)(tx + tw), (int32_t)(ty + th));
-      src_clip_rect =
-          qoir_rectangle__intersect(src_clip_rect, src_clip_rectangle);
-      src_clip_rect =
-          qoir_rectangle__intersect(src_clip_rect, dst_clip_rect_in_src_space);
-
-      if (src_len < 4) {
-        return qoir_status_message__error_invalid_data;
-      }
-      uint32_t prefix = qoir_private_peek_u32le(src_ptr);
-      src_ptr += 4;
-      src_len -= 4;
-      size_t tile_len = prefix & 0xFFFFFF;
-      if ((src_len < (tile_len + 8)) ||  //
-          (((4 * QOIR_TS2) < tile_len) && ((prefix >> 31) != 0))) {
-        return qoir_status_message__error_invalid_data;
-      }
-
-      if (qoir_rectangle__is_empty(src_clip_rect)) {
-        src_ptr += tile_len;
-        src_len -= tile_len;
-        continue;
-      }
-
-      const uint8_t* literals = NULL;
-      switch (prefix >> 24) {
-        case 0: {  // Literals tile format.
-          if (tile_len != (4 * tw * th)) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = src_ptr;
-          break;
-        }
-        case 1: {  // Opcodes tile format.
-          qoir_size_result r = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals,              //
-              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
-              src_ptr, tile_len + 8);                     // See § for +8.
-          if (r.status_message) {
-            return r.status_message;
-          } else if (r.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
-          break;
-        }
-        case 2: {  // LZ4-Literals tile format.
-          qoir_size_result r = qoir_lz4_block_decode(
-              decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
-              sizeof(decbuf->private_impl.literals) - QOIR_LITERALS_PRE_PADDING,
-              src_ptr, tile_len);
-          if (r.status_message) {
-            return qoir_status_message__error_invalid_data;
-          } else if (r.value != (4 * tw * th)) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
-          break;
-        }
-        case 3: {  // LZ4-Opcodes tile format.
-          qoir_size_result r0 = qoir_lz4_block_decode(
-              decbuf->private_impl.opcodes,
-              sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
-          if (r0.status_message) {
-            return qoir_status_message__error_invalid_data;
-          }
-          qoir_size_result r1 = qoir_private_decode_tile_opcodes(
-              decbuf->private_impl.literals,                //
-              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),    //
-              decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
-          if (r1.status_message) {
-            return r1.status_message;
-          } else if (r1.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
-            return qoir_status_message__error_invalid_data;
-          }
-          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
-          break;
-        }
-        default:
-          return qoir_status_message__error_unsupported_tile_format;
-      }
-
-      src_ptr += tile_len;
-      src_len -= tile_len;
-
-      if (lossiness) {
-        uint8_t* p = decbuf->private_impl.opcodes;
-        const uint8_t* q = literals;
-        const uint8_t* unlossify = qoir_private_table_unlossify[lossiness - 1];
-        for (uint32_t i = 4 * tw * th; i > 0; i--) {
-          *p++ = unlossify[*q++];
-        }
-        literals = decbuf->private_impl.opcodes;
-      }
-
-      uint8_t* dp =
-          dst_pixbuf.data +
-          ((src_clip_rect.y0 + offset_y) * dst_pixbuf.stride_in_bytes) +
-          ((src_clip_rect.x0 + offset_x) * num_dst_channels);
-      const uint8_t* sp = literals +
-                          ((src_clip_rect.y0 & QOIR_TILE_MASK) * 4 * tw) +
-                          ((src_clip_rect.x0 & QOIR_TILE_MASK) * 4);
-      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, sp, 4 * tw,
-                      qoir_rectangle__width(src_clip_rect),
-                      qoir_rectangle__height(src_clip_rect));
-    }
-  }
-
-done:
-  if (src_len != 8) {
-    return qoir_status_message__error_invalid_data;
-  }
-  return NULL;
-}
-
-static qoir_decode_result               //
-qoir_private_make_decode_result_error(  //
-    const char* status_message) {
-  qoir_decode_result result = {0};
-  result.status_message = status_message;
-  return result;
-}
-
-QOIR_MAYBE_STATIC qoir_decode_result  //
-qoir_decode(                          //
-    const uint8_t* src_ptr,           //
-    const size_t src_len,             //
-    const qoir_decode_options* options) {
-  qoir_decode_result result = {0};
-  qoir_rectangle dst_clip_rectangle =
-      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
-  qoir_rectangle src_clip_rectangle =
-      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
-  int32_t offset_x = 0;
-  int32_t offset_y = 0;
-  if (options) {
-    if ((options->pixbuf.pixcfg.width_in_pixels > 0xFFFFFF) ||
-        (options->pixbuf.pixcfg.height_in_pixels > 0xFFFFFF)) {
-      return qoir_private_make_decode_result_error(
-          qoir_status_message__error_unsupported_pixbuf_dimensions);
-    }
-    memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
-    if (options->use_dst_clip_rectangle) {
-      memcpy(&dst_clip_rectangle, &options->dst_clip_rectangle,
-             sizeof(options->dst_clip_rectangle));
-    }
-    if (options->use_src_clip_rectangle) {
-      memcpy(&src_clip_rectangle, &options->src_clip_rectangle,
-             sizeof(options->src_clip_rectangle));
-    }
-    if ((-0xFFFFFF <= options->offset_x) && (options->offset_x <= 0xFFFFFF) &&
-        (-0xFFFFFF <= options->offset_y) && (options->offset_y <= 0xFFFFFF)) {
-      offset_x = options->offset_x;
-      offset_y = options->offset_y;
-    } else {
-      dst_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
-      src_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
-    }
-  }
-
-  if ((src_len < 44) ||
-      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
-    return qoir_private_make_decode_result_error(
-        qoir_status_message__error_invalid_data);
-  }
-  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
-  if ((qoir_chunk_payload_len < 8) ||
-      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
-      (qoir_chunk_payload_len > (src_len - 44))) {
-    return qoir_private_make_decode_result_error(
-        qoir_status_message__error_invalid_data);
-  }
-
-  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
-  uint32_t width_in_pixels = 0xFFFFFF & header0;
-  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
-  switch (src_pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-      break;
-    default:
-      goto fail_invalid_data;
-  }
-  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
-  uint32_t height_in_pixels = 0xFFFFFF & header1;
-  uint32_t lossiness = 0x07 & (header1 >> 24);
-
-  qoir_pixel_format dst_pixfmt =
-      (options && !qoir_pixel_buffer__is_zero(options->pixbuf))
-          ? options->pixbuf.pixcfg.pixfmt
-          : ((options && options->pixfmt) ? options->pixfmt
-                                          : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL);
-  uint64_t dst_width_in_bytes =
-      width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
-
-  bool seen_qpix = false;
-  const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_len);
-  size_t sn = src_len - (12 + qoir_chunk_payload_len);
-  while (1) {
-    if (sn < 12) {
-      goto fail_invalid_data;
-    }
-    uint32_t chunk_type = qoir_private_peek_u32le(sp + 0);
-    uint64_t payload_len = qoir_private_peek_u64le(sp + 4);
-    if (payload_len > 0x7FFFFFFFFFFFFFFFull) {
-      goto fail_invalid_data;
-    }
-    sp += 12;
-    sn -= 12;
-
-    if (chunk_type == 0x52494F51) {  // "QOIR"le.
-      goto fail_invalid_data;
-    } else if (chunk_type == 0x444E4551) {  // "QEND"le.
-      if ((payload_len != 0) || (sn != 0)) {
-        goto fail_invalid_data;
-      }
-      break;
-    }
-
-    // This chunk must be followed by at least the QEND chunk (12 bytes).
-    if ((sn < payload_len) || ((sn - payload_len) < 12)) {
-      goto fail_invalid_data;
-    }
-
-    if (chunk_type == 0x58495051) {  // "QPIX"le.
-      if (seen_qpix) {
-        goto fail_invalid_data;
-      }
-      seen_qpix = true;
-
-      uint64_t pixbuf_len = dst_width_in_bytes * (uint64_t)height_in_pixels;
-      if (pixbuf_len > SIZE_MAX) {
-        return qoir_private_make_decode_result_error(
-            qoir_status_message__error_unsupported_pixbuf_dimensions);
-
-      } else if (pixbuf_len > 0) {
-        if (qoir_pixel_buffer__is_zero(result.dst_pixbuf)) {
-          result.owned_memory = QOIR_MALLOC((size_t)pixbuf_len);
-          if (!result.owned_memory) {
-            return qoir_private_make_decode_result_error(
-                qoir_status_message__error_out_of_memory);
-          }
-          if (options && (options->use_dst_clip_rectangle ||
-                          options->use_src_clip_rectangle)) {
-            memset(result.owned_memory, 0, pixbuf_len);
-          }
-          result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
-          result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
-          result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
-          result.dst_pixbuf.data = result.owned_memory;
-          result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
-        }
-        qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
-        bool free_decbuf = false;
-        if (!decbuf) {
-          decbuf = (qoir_decode_buffer*)QOIR_MALLOC(sizeof(qoir_decode_buffer));
-          if (!decbuf) {
-            QOIR_FREE(result.owned_memory);
-            return qoir_private_make_decode_result_error(
-                qoir_status_message__error_out_of_memory);
-          }
-          free_decbuf = true;
-        }
-        const char* status_message = qoir_private_decode_qpix_payload(
-            decbuf, result.dst_pixbuf, dst_clip_rectangle, src_pixfmt,
-            width_in_pixels, height_in_pixels, sp,
-            payload_len + 8,  // See § for +8.
-            src_clip_rectangle, offset_x, offset_y, lossiness);
-        if (free_decbuf) {
-          QOIR_FREE(decbuf);
-        }
-        if (status_message) {
-          QOIR_FREE(result.owned_memory);
-          return qoir_private_make_decode_result_error(status_message);
-        }
-
-      } else if (payload_len != 0) {
-        goto fail_invalid_data;
-      }
-
-    } else if (chunk_type == 0x50434943) {  // "CICP"le.
-      if (result.metadata_cicp_ptr) {
-        goto fail_invalid_data;
-      }
-      result.metadata_cicp_ptr = sp;
-      result.metadata_cicp_len = payload_len;
-
-    } else if (chunk_type == 0x50434349) {  // "ICCP"le.
-      if (result.metadata_iccp_ptr) {
-        goto fail_invalid_data;
-      }
-      result.metadata_iccp_ptr = sp;
-      result.metadata_iccp_len = payload_len;
-
-    } else if (chunk_type == 0x46495845) {  // "EXIF"le.
-      if (result.metadata_exif_ptr) {
-        goto fail_invalid_data;
-      }
-      result.metadata_exif_ptr = sp;
-      result.metadata_exif_len = payload_len;
-
-    } else if (chunk_type == 0x20504D58) {  // "XMP "le.
-      if (result.metadata_xmp_ptr) {
-        goto fail_invalid_data;
-      }
-      result.metadata_xmp_ptr = sp;
-      result.metadata_xmp_len = payload_len;
-    }
-
-    sp += payload_len;
-    sn -= payload_len;
-  }
-
-  if (!seen_qpix) {
-    goto fail_invalid_data;
-  }
-  return result;
-
-fail_invalid_data:
-  QOIR_FREE(result.owned_memory);
-  return qoir_private_make_decode_result_error(
-      qoir_status_message__error_invalid_data);
-}
-
-// -------- QOIR Encode
-
-#define QOIR_HASH_TABLE_SHIFT 10
-
-static QOIR_ALWAYS_INLINE void  //
-qoir_private_encode_dither(     //
-    uint8_t* ptr,               //
-    uint32_t lossiness,         //
-    uint32_t noise) {
-  if (*ptr >= 0xFF) {
-    *ptr = 0xFF >> lossiness;
-    return;
-  }
-
-  // Find the lower (inclusive) and upper (exclusive) quantized values that
-  // bracket the pixel value.
-  uint8_t low_shifted = 0;
-  uint8_t shifted = *ptr >> lossiness;
-  if (shifted > 0) {
-    low_shifted = shifted - 1;
-  }
-  uint8_t* unshift = qoir_private_table_unlossify[lossiness - 1];
-  uint8_t lower = unshift[low_shifted + 0];
-  uint8_t upper = unshift[low_shifted + 1];
-  if (*ptr >= upper) {
-    lower = unshift[low_shifted + 1];
-    upper = unshift[low_shifted + 2];
-  }
-
-  // Compare the pixel's position in that bracket to the noise.
-  uint32_t p = *ptr;
-  uint32_t l = lower;
-  uint32_t u = upper;
-  uint32_t m = ((256 * (p - l)) > (noise * (u - l))) ? u : l;
-  *ptr = (uint8_t)(m >> lossiness);
-}
-
-static QOIR_ALWAYS_INLINE qoir_size_result  //
-qoir_private_encode_tile_opcodes(           //
-    uint8_t* dst_ptr,                       //
-    const uint8_t* src_ptr,                 //
-    uint32_t tw,                            //
-    uint32_t th,                            //
-    bool has_alpha) {
-  // dists holds the log2 distance from zero (with modular arithmetic).
-  //  - There is    1 element  such that (dists[i] <   1).
-  //  - There are   2 elements such that (dists[i] <   2).
-  //  - There are   4 elements such that (dists[i] <   4).
-  //  - There are   8 elements such that (dists[i] <   8).
-  //  - etc.
-  //  - There are 128 elements such that (dists[i] < 128).
-  //  - There are 256 elements such that (dists[i] < 256).
-  //
-  // The table was generated by script/gen_table_dists.go
-  static const uint8_t dists[256] = {
-      0x00, 0x02, 0x04, 0x04, 0x08, 0x08, 0x08, 0x08,  //
-      0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,  //
-      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
-      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
-      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
-      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
-      0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,  //
-      0x08, 0x08, 0x08, 0x08, 0x04, 0x04, 0x02, 0x01,  //
-  };
-
-  qoir_size_result result = {0};
-
-  uint32_t run_length = 0;
-
-  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
-  // for performance. It is always indexed by a uint8_t value that is a
-  // multiple of four. The four uint8_t elements are in B, G, R, A order.
-  uint8_t color_cache[256];
-  for (int i = 0; i < 256; i += 4) {
-    color_cache[i + 0] = 0x00;
-    color_cache[i + 1] = 0x00;
-    color_cache[i + 2] = 0x00;
-    color_cache[i + 3] = 0xFF;
-  }
-  uint8_t next_color_index = 0;
-  uint8_t color_indexes[1 << QOIR_HASH_TABLE_SHIFT] = {0};
-
-  uint8_t* dp = dst_ptr;
-  const uint8_t* sp = src_ptr + QOIR_LITERALS_PRE_PADDING;
-  const uint8_t* sq =
-      src_ptr + QOIR_LITERALS_PRE_PADDING + (4 * (size_t)tw * (size_t)th);
-  for (; sp < sq; sp += 4) {
-    if (!memcmp(sp, sp - 4, 4)) {
-      run_length++;
-      if (run_length == 256) {
-        *dp++ = 0xD7;  // QOIR_OP_RUNL
-        *dp++ = 0xFF;
-        run_length = 0;
-      }
-      continue;
-    }
-
-    if (run_length > 0) {
-      if (run_length <= 26) {
-        *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
-        run_length = 0;
-      } else {
-        *dp++ = 0xD7;  // QOIR_OP_RUNL
-        *dp++ = (uint8_t)(run_length - 1);
-        run_length = 0;
-      }
-    }
-
-    // 2654435761u is Knuth's magic constant.
-    uint32_t hash = (qoir_private_peek_u32le(sp) * 2654435761u) >>
-                    (32 - QOIR_HASH_TABLE_SHIFT);
-    uint8_t index = color_indexes[hash];
-    if (!memcmp(color_cache + index, sp, 4)) {
-      *dp++ = (uint8_t)(0x00 | index);  // QOIR_OP_INDEX
-      continue;
-    }
-
-    color_indexes[hash] = next_color_index;
-    memcpy(color_cache + next_color_index, sp, 4);
-    next_color_index += 4;
-
-    uint8_t delta[4];
-    uint32_t cp8x4;  // Current pixel.
-    uint32_t pl8x4;  // Pixel left.
-    memcpy(&cp8x4, sp, 4);
-    memcpy(&pl8x4, sp - 4, 4);
-    // Either code path is equivalent to (but faster than):
-    //   delta[i] = sp[i] - sp[i - 4];
-    // for i in 0..4.
-#if defined(QOIR_USE_SIMD_SSE2)
-    uint32_t delta8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_sub_epi8(
-        _mm_cvtsi32_si128((int)cp8x4), _mm_cvtsi32_si128((int)pl8x4)));
-#else
-    uint32_t delta8x4 = QOIR_SWAR_PSUBB(cp8x4, pl8x4);
-#endif
-    memcpy(delta, &delta8x4, 4);
-
-    if (!has_alpha || (delta[3] == 0)) {
-      uint8_t dist02 = dists[delta[0]] | dists[delta[2]];
-      uint8_t dist1 = dists[delta[1]];
-      uint8_t dist = dist02 | dist1;
-
-      uint8_t d0d1 = delta[0] - delta[1];
-      uint8_t d2d1 = delta[2] - delta[1];
-
-      if (dist < 0x04) {
-        *dp++ = 0x01 |                         // QOIR_OP_BGR2
-                ((delta[0] + 0x02) << 0x02) |  //
-                ((delta[1] + 0x02) << 0x04) |  //
-                ((delta[2] + 0x02) << 0x06);
-
-      } else if (!((dist1 >> 6) | (dists[d0d1] >> 4) | (dists[d2d1] >> 4))) {
-        *dp++ = 0x02 |                        // QOIR_OP_LUMA
-                ((delta[1] + 0x20) << 0x02);  //
-        *dp++ = ((d0d1 + 0x08) << 0x00) |     //
-                ((d2d1 + 0x08) << 0x04);
-
-      } else if (dist < 0x80) {
-        qoir_private_poke_u32le(
-            dp,
-            0x03 |  // QOIR_OP_BGR7
-                ((uint32_t)(uint8_t)(delta[0] + 0x40) << 0x03) |
-                ((uint32_t)(uint8_t)(delta[1] + 0x40) << 0x0A) |
-                ((uint32_t)(uint8_t)(delta[2] + 0x40) << 0x11));
-        dp += 3;
-
-      } else {
-        *dp++ = 0xF7;  // QOIR_OP_BGR8
-        *dp++ = delta[0];
-        *dp++ = delta[1];
-        *dp++ = delta[2];
-      }
-
-    } else if ((delta[0] | delta[1] | delta[2]) == 0) {
-      *dp++ = 0xFF;  // QOIR_OP_A8
-      *dp++ = delta[3];
-
-    } else {
-      uint8_t dist =
-          dists[delta[0]] | dists[delta[1]] | dists[delta[2]] | dists[delta[3]];
-      if (dist < 0x04) {
-        *dp++ = 0xDF;                          // QOIR_OP_BGRA2
-        *dp++ = ((delta[0] + 0x02) << 0x00) |  //
-                ((delta[1] + 0x02) << 0x02) |  //
-                ((delta[2] + 0x02) << 0x04) |  //
-                ((delta[3] + 0x02) << 0x06);
-      } else if (dist < 0x10) {
-        *dp++ = 0xE7;                          // QOIR_OP_BGRA4
-        *dp++ = ((delta[0] + 0x08) << 0x00) |  //
-                ((delta[1] + 0x08) << 0x04);   //
-        *dp++ = ((delta[2] + 0x08) << 0x00) |  //
-                ((delta[3] + 0x08) << 0x04);
-      } else {
-        *dp++ = 0xEF;  // QOIR_OP_BGRA8
-        *dp++ = delta[0];
-        *dp++ = delta[1];
-        *dp++ = delta[2];
-        *dp++ = delta[3];
-      }
-    }
-  }
-
-  if (run_length > 0) {
-    if (run_length <= 26) {
-      *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
-      run_length = 0;
-    } else {
-      *dp++ = 0xD7;  // QOIR_OP_RUNL
-      *dp++ = (uint8_t)(run_length - 1);
-      run_length = 0;
-    }
-  }
-
-  result.value = (size_t)(dp - dst_ptr);
-  return result;
-}
-
-static qoir_size_result                       //
-qoir_private_encode_tile_opcodes_sans_alpha(  //
-    uint8_t* dst_ptr,                         //
-    const uint8_t* src_ptr,                   //
-    uint32_t tw,                              //
-    uint32_t th) {
-  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, false);
-}
-
-static qoir_size_result                       //
-qoir_private_encode_tile_opcodes_with_alpha(  //
-    uint8_t* dst_ptr,                         //
-    const uint8_t* src_ptr,                   //
-    uint32_t tw,                              //
-    uint32_t th) {
-  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, true);
-}
-
-static qoir_size_result                   //
-qoir_private_encode_qpix_payload(         //
-    qoir_encode_buffer* encbuf,           //
-    uint8_t* dst_ptr,                     //
-    const qoir_pixel_buffer* src_pixbuf,  //
-    uint32_t lossiness,                   //
-    bool dither) {
-  qoir_size_result result = {0};
-
-  size_t height_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.height_in_pixels);
-  size_t width_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.width_in_pixels);
-  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
-    return result;
-  }
-  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
-  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
-
-  qoir_private_swizzle_func swizzle_func = NULL;
-  switch (src_pixbuf->pixcfg.pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-      swizzle_func = qoir_private_swizzle__copy_4;
-      break;
-    case QOIR_PIXEL_FORMAT__BGR:
-      swizzle_func = qoir_private_swizzle__bgra__bgr;
-      break;
-    case QOIR_PIXEL_FORMAT__RGBX:
-    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
-      swizzle_func = qoir_private_swizzle__bgra__rgba;
-      break;
-    case QOIR_PIXEL_FORMAT__RGB:
-      swizzle_func = qoir_private_swizzle__bgra__rgb;
-      break;
-    default:
-      result.status_message = qoir_status_message__error_unsupported_pixfmt;
-      return result;
-  }
-
-  qoir_size_result (*encode_func)(uint8_t * dst_ptr,       //
-                                  const uint8_t* src_ptr,  //
-                                  uint32_t tw,             //
-                                  uint32_t th) =
-      ((src_pixbuf->pixcfg.pixfmt &
-        QOIR_PIXEL_FORMAT__MASK_FOR_ALPHA_TRANSPARENCY) ==
-       QOIR_PIXEL_ALPHA_TRANSPARENCY__OPAQUE)
-          ? qoir_private_encode_tile_opcodes_sans_alpha
-          : qoir_private_encode_tile_opcodes_with_alpha;
-
-  size_t num_src_channels =
-      qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
-  uint8_t* dp = dst_ptr;
-
-  uint8_t* literals_pre_padding = encbuf->private_impl.literals;
-  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
-    literals_pre_padding[i + 0] = 0x00;
-    literals_pre_padding[i + 1] = 0x00;
-    literals_pre_padding[i + 2] = 0x00;
-    literals_pre_padding[i + 3] = 0xFF;
-  }
-
-  // ty, tx, tw and th are the tile's top-left offset, width and height, all
-  // measured in pixels.
-  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
-    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
-      size_t tw = qoir_private_tile_dimension(
-          tx < tx1, src_pixbuf->pixcfg.width_in_pixels);
-      size_t th = qoir_private_tile_dimension(
-          ty < ty1, src_pixbuf->pixcfg.height_in_pixels);
-
-      const uint8_t* sp = src_pixbuf->data +
-                          (src_pixbuf->stride_in_bytes * ty) +
-                          (num_src_channels * tx);
-      (*swizzle_func)(encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
-                      4 * tw,                           //
-                      sp, src_pixbuf->stride_in_bytes,  //
-                      tw, th);
-
-      if (lossiness == 0) {
-        // No-op.
-      } else if (!dither) {
-        for (size_t i = 0; i < 4 * tw * th; i++) {
-          encbuf->private_impl.literals[i + QOIR_LITERALS_PRE_PADDING] >>=
-              lossiness;
-        }
-      } else {
-        uint8_t* ptr =
-            &encbuf->private_impl.literals[QOIR_LITERALS_PRE_PADDING];
-        for (size_t y = 0; y < th; y++) {
-          for (size_t x = 0; x < tw; x++) {
-            uint8_t noise = qoir_private_table_noise[y & 15][x & 15];
-            qoir_private_encode_dither(ptr + 0, lossiness, noise);
-            qoir_private_encode_dither(ptr + 1, lossiness, noise);
-            qoir_private_encode_dither(ptr + 2, lossiness, noise);
-            qoir_private_encode_dither(ptr + 3, lossiness, noise);
-            ptr += 4;
-          }
-        }
-      }
-
-      qoir_size_result r0 = (*encode_func)(
-          encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
-      if (r0.status_message) {
-        result.status_message = r0.status_message;
-        return r0;
-      }
-      size_t literals_len = 4 * tw * th;
-      if (r0.value >= literals_len) {
-        // Use the Literals or LZ4-Literals tile format.
-        qoir_size_result r1 = qoir_lz4_block_encode(
-            dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
-            encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
-            literals_len);
-        if (!r1.status_message && (r1.value < r0.value)) {
-          qoir_private_poke_u32le(dp, 0x02000000 | (uint32_t)r1.value);
-          dp += 4 + r1.value;
-        } else {
-          memcpy(dp + 4,
-                 encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
-                 literals_len);
-          qoir_private_poke_u32le(dp, 0x00000000 | (uint32_t)literals_len);
-          dp += 4 + literals_len;
-        }
-
-      } else {
-        // Use the Opcodes or LZ4-Opcodes tile format.
-        qoir_size_result r1 =
-            qoir_lz4_block_encode(dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
-                                  encbuf->private_impl.opcodes, r0.value);
-        if (!r1.status_message && (r1.value < r0.value)) {
-          qoir_private_poke_u32le(dp, 0x03000000 | (uint32_t)r1.value);
-          dp += 4 + r1.value;
-        } else {
-          memcpy(dp + 4, encbuf->private_impl.opcodes, r0.value);
-          qoir_private_poke_u32le(dp, 0x01000000 | (uint32_t)r0.value);
-          dp += 4 + r0.value;
-        }
-      }
-    }
-  }
-
-  result.value = (size_t)(dp - dst_ptr);
-  return result;
-}
-
-QOIR_MAYBE_STATIC qoir_encode_result      //
-qoir_encode(                              //
-    const qoir_pixel_buffer* src_pixbuf,  //
-    const qoir_encode_options* options) {
-  qoir_encode_result result = {0};
-  if (!src_pixbuf) {
-    result.status_message = qoir_status_message__error_invalid_argument;
-    return result;
-  } else if ((src_pixbuf->pixcfg.width_in_pixels > 0xFFFFFF) ||
-             (src_pixbuf->pixcfg.height_in_pixels > 0xFFFFFF)) {
-    result.status_message =
-        qoir_status_message__error_unsupported_pixbuf_dimensions;
-    return result;
-  }
-
-  qoir_pixel_format dst_pixfmt = 0;
-  switch (src_pixbuf->pixcfg.pixfmt) {
-    case QOIR_PIXEL_FORMAT__BGRX:
-    case QOIR_PIXEL_FORMAT__BGR:
-    case QOIR_PIXEL_FORMAT__RGBX:
-    case QOIR_PIXEL_FORMAT__RGB:
-      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRX;
-      break;
-    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
-    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
-      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_NONPREMUL;
-      break;
-    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
-    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
-      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_PREMUL;
-      break;
-    default:
-      result.status_message = qoir_status_message__error_unsupported_pixfmt;
-      return result;
-  }
-
-  uint64_t width_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.width_in_pixels);
-  uint64_t height_in_tiles =
-      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.height_in_pixels);
-  uint64_t tile_len_worst_case =
-      4 + (4 * QOIR_TS2);  // Prefix + literal format.
-  uint64_t dst_len_worst_case =
-      (width_in_tiles * height_in_tiles * tile_len_worst_case) +
-      44 +  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
-            // QOIR also has an 8 byte payload.
-      (QOIR_TILE_LZ4_COMPRESSION_WORST_CASE -
-       (4 * QOIR_TS2));  // We might temporarily write more than (4 * QOIR_TS2)
-                         // bytes when LZ4 compressing each tile.
-  if (options) {
-    bool overflow = false;
-    if (options->metadata_cicp_len) {
-      overflow = overflow ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case,
-                                               options->metadata_cicp_len);
-    }
-    if (options->metadata_iccp_len) {
-      overflow = overflow ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case,
-                                               options->metadata_iccp_len);
-    }
-    if (options->metadata_exif_len) {
-      overflow = overflow ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case,
-                                               options->metadata_exif_len);
-    }
-    if (options->metadata_xmp_len) {
-      overflow = overflow ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
-                 qoir_private_u64_overflow_add(&dst_len_worst_case,
-                                               options->metadata_xmp_len);
-    }
-    if (overflow) {
-      result.status_message =
-          qoir_status_message__error_unsupported_metadata_size;
-      return result;
-    }
-  }
-  if (dst_len_worst_case > SIZE_MAX) {
-    result.status_message =
-        qoir_status_message__error_unsupported_pixbuf_dimensions;
-    return result;
-  }
-  uint8_t* const original_dst_ptr = QOIR_MALLOC((size_t)dst_len_worst_case);
-  if (!original_dst_ptr) {
-    result.status_message = qoir_status_message__error_out_of_memory;
-    return result;
-  }
-  uint32_t lossiness = 0;
-  if (options) {
-    lossiness = options->lossiness;
-    if (lossiness > 7) {
-      lossiness = 7;
-    }
-  }
-  uint8_t* dst_ptr = original_dst_ptr;
-
-  // QOIR chunk.
-  qoir_private_poke_u32le(dst_ptr + 0, 0x52494F51);  // "QOIR"le.
-  qoir_private_poke_u64le(dst_ptr + 4, 8);
-  qoir_private_poke_u32le(dst_ptr + 12, src_pixbuf->pixcfg.width_in_pixels);
-  qoir_private_poke_u32le(dst_ptr + 16, src_pixbuf->pixcfg.height_in_pixels);
-  dst_ptr[15] = dst_pixfmt;
-  dst_ptr[19] = lossiness;
-  dst_ptr += 20;
-
-  // CICP chunk.
-  if (options && options->metadata_cicp_len) {
-    qoir_private_poke_u32le(dst_ptr + 0, 0x50434943);  // "CICP"le.
-    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_cicp_len);
-    memcpy(dst_ptr + 12, options->metadata_cicp_ptr,
-           options->metadata_cicp_len);
-    dst_ptr += 12 + options->metadata_cicp_len;
-  }
-
-  // ICCP chunk.
-  if (options && options->metadata_iccp_len) {
-    qoir_private_poke_u32le(dst_ptr + 0, 0x50434349);  // "ICCP"le.
-    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_iccp_len);
-    memcpy(dst_ptr + 12, options->metadata_iccp_ptr,
-           options->metadata_iccp_len);
-    dst_ptr += 12 + options->metadata_iccp_len;
-  }
-
-  // QPIX chunk.
-  qoir_private_poke_u32le(dst_ptr, 0x58495051);  // "QPIX"le.
-  qoir_encode_buffer* encbuf = options ? options->encbuf : NULL;
-  bool free_encbuf = false;
-  if (!encbuf) {
-    encbuf = (qoir_encode_buffer*)QOIR_MALLOC(sizeof(qoir_encode_buffer));
-    if (!encbuf) {
-      result.status_message = qoir_status_message__error_out_of_memory;
-      QOIR_FREE(original_dst_ptr);
-      return result;
-    }
-    free_encbuf = true;
-  }
-  qoir_size_result r = qoir_private_encode_qpix_payload(
-      encbuf, dst_ptr + 12, src_pixbuf, lossiness, options && options->dither);
-  if (free_encbuf) {
-    QOIR_FREE(encbuf);
-  }
-  if (r.status_message) {
-    result.status_message = r.status_message;
-    QOIR_FREE(original_dst_ptr);
-    return result;
-  } else if ((uint64_t)r.value > 0x7FFFFFFFFFFFFFFFull) {
-    result.status_message =
-        qoir_status_message__error_unsupported_pixbuf_dimensions;
-    QOIR_FREE(original_dst_ptr);
-    return result;
-  }
-  qoir_private_poke_u64le(dst_ptr + 4, r.value);
-  dst_ptr += 12 + r.value;
-
-  // EXIF chunk.
-  if (options && options->metadata_exif_len) {
-    qoir_private_poke_u32le(dst_ptr + 0, 0x46495845);  // "EXIF"le.
-    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_exif_len);
-    memcpy(dst_ptr + 12, options->metadata_exif_ptr,
-           options->metadata_exif_len);
-    dst_ptr += 12 + options->metadata_exif_len;
-  }
-
-  // XMP chunk.
-  if (options && options->metadata_xmp_len) {
-    qoir_private_poke_u32le(dst_ptr + 0, 0x20504D58);  // "XMP "le.
-    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_xmp_len);
-    memcpy(dst_ptr + 12, options->metadata_xmp_ptr, options->metadata_xmp_len);
-    dst_ptr += 12 + options->metadata_xmp_len;
-  }
-
-  // QEND chunk.
-  qoir_private_poke_u32le(dst_ptr + 0, 0x444E4551);  // "QEND"le.
-  qoir_private_poke_u64le(dst_ptr + 4, 0);
-  dst_ptr += 12;
-
-  result.owned_memory = original_dst_ptr;
-  result.dst_ptr = original_dst_ptr;
-  result.dst_len = dst_ptr - original_dst_ptr;
-  return result;
-}
-
-// -------- Private Macros
-
-#undef QOIR_ALWAYS_INLINE
-#undef QOIR_FREE
-#undef QOIR_HASH_TABLE_SHIFT
-#undef QOIR_LZ4_HASH_TABLE_SHIFT
-#undef QOIR_MALLOC
-#undef QOIR_SWAR_PADDB
-#undef QOIR_SWAR_PSUBB
-#undef QOIR_USE_MEMCPY_LE_PEEK_POKE
-#undef QOIR_USE_SIMD_SSE2
-
 // -------- Look-up Tables
 
 // clang-format off
@@ -6972,7 +4735,2239 @@ static uint8_t qoir_private_table_luma[65536] = {
 };
 #endif
 
+// -------- Basics
+
 // clang-format on
+#if defined(QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY)
+#include <limits.h>
+#include <lz4.h>
+#endif
+
+// This implementation assumes that:
+//  - converting a uint32_t to a size_t will never overflow.
+//  - converting a size_t to a uint64_t will never overflow.
+#if defined(__WORDSIZE)
+#if (__WORDSIZE != 32) && (__WORDSIZE != 64)
+#error "qoir.h requires a word size of either 32 or 64 bits"
+#endif
+#endif
+
+#if defined(__GNUC__)
+#define QOIR_ALWAYS_INLINE inline __attribute__((__always_inline__))
+#elif defined(_MSC_VER)
+#define QOIR_ALWAYS_INLINE __forceinline
+#else
+#define QOIR_ALWAYS_INLINE inline
+#endif
+
+#if !defined(QOIR_CONFIG__DISABLE_SIMD)
+#if (defined(__GNUC__) && defined(__x86_64__)) || \
+    (defined(_MSC_VER) && defined(_M_X64))
+#define QOIR_USE_SIMD_SSE2
+#include <emmintrin.h>
+#endif
+#endif
+
+// Normally, the qoir_private_peek_etc and qoir_private_poke_etc
+// implementations are both (1) correct regardless of CPU endianness and (2)
+// very fast (e.g. an inlined qoir_private_peek_u32le call, in an optimized
+// clang or gcc build, is a single MOV instruction on x86_64).
+//
+// However, the endian-agnostic implementations are slow on Microsoft's C
+// compiler (MSC). Alternative memcpy-based implementations restore speed, but
+// they are only correct on little-endian CPU architectures. Defining
+// QOIR_USE_MEMCPY_LE_PEEK_POKE opts in to these implementations.
+//
+// https://godbolt.org/z/q4MfjzTPh
+#if defined(_MSC_VER) && !defined(__clang__) && \
+    (defined(_M_ARM64) || defined(_M_X64))
+#define QOIR_USE_MEMCPY_LE_PEEK_POKE
+#endif
+
+static inline uint32_t    //
+qoir_private_peek_u32le(  //
+    const uint8_t* p) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  uint32_t x;
+  memcpy(&x, p, 4);
+  return x;
+#else
+  return ((uint32_t)(p[0]) << 0) | ((uint32_t)(p[1]) << 8) |
+         ((uint32_t)(p[2]) << 16) | ((uint32_t)(p[3]) << 24);
+#endif
+}
+
+static inline uint64_t    //
+qoir_private_peek_u64le(  //
+    const uint8_t* p) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  uint64_t x;
+  memcpy(&x, p, 8);
+  return x;
+#else
+  return ((uint64_t)(p[0]) << 0) | ((uint64_t)(p[1]) << 8) |
+         ((uint64_t)(p[2]) << 16) | ((uint64_t)(p[3]) << 24) |
+         ((uint64_t)(p[4]) << 32) | ((uint64_t)(p[5]) << 40) |
+         ((uint64_t)(p[6]) << 48) | ((uint64_t)(p[7]) << 56);
+#endif
+}
+
+static inline void        //
+qoir_private_poke_u32le(  //
+    uint8_t* p,           //
+    uint32_t x) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  memcpy(p, &x, 4);
+#else
+  p[0] = (uint8_t)(x >> 0);
+  p[1] = (uint8_t)(x >> 8);
+  p[2] = (uint8_t)(x >> 16);
+  p[3] = (uint8_t)(x >> 24);
+#endif
+}
+
+static inline void        //
+qoir_private_poke_u64le(  //
+    uint8_t* p,           //
+    uint64_t x) {
+#if defined(QOIR_USE_MEMCPY_LE_PEEK_POKE)
+  memcpy(p, &x, 8);
+#else
+  p[0] = (uint8_t)(x >> 0);
+  p[1] = (uint8_t)(x >> 8);
+  p[2] = (uint8_t)(x >> 16);
+  p[3] = (uint8_t)(x >> 24);
+  p[4] = (uint8_t)(x >> 32);
+  p[5] = (uint8_t)(x >> 40);
+  p[6] = (uint8_t)(x >> 48);
+  p[7] = (uint8_t)(x >> 56);
+#endif
+}
+
+static inline bool              //
+qoir_private_u64_overflow_add(  //
+    uint64_t* x,                //
+    uint64_t y) {
+  uint64_t old = *x;
+  *x += y;
+  return *x < old;
+}
+
+static inline uint32_t        //
+qoir_private_tile_dimension(  //
+    bool interior,            //
+    uint32_t pixel_dimension) {
+  return interior ? QOIR_TILE_SIZE
+                  : (((pixel_dimension - 1) & QOIR_TILE_MASK) + 1);
+}
+
+// QOIR_TILE_LZ4_COMPRESSION_WORST_CASE equals
+// qoir_lz4_block_encode_worst_case_dst_len(4 * QTS * QTS).
+#define QOIR_TILE_LZ4_COMPRESSION_WORST_CASE \
+  ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) +   \
+   ((4 * QOIR_TILE_SIZE * QOIR_TILE_SIZE) / 255) + 16)
+
+// -------- SWAR (SIMD Within a Register)
+
+// These treat a u32 as a u8x4 vector.
+
+// QOIR_SWAR_PADDB returns (a + b).
+#define QOIR_SWAR_PADDB(a, b) \
+  (((a & 0x7F7F7F7F) + (b & 0x7F7F7F7F)) ^ ((a ^ b) & 0x80808080))
+
+// QOIR_SWAR_PSUBB returns (a - b).
+#define QOIR_SWAR_PSUBB(a, b) \
+  ((a | 0x80808080) - (b & 0x7F7F7F7F)) ^ ((a ^ ~b) & 0x80808080)
+
+// -------- Memory Management
+
+#define QOIR_MALLOC(len)                                                \
+  qoir_private_malloc(options ? options->contextual_malloc_func : NULL, \
+                      options ? options->memory_func_context : NULL, len)
+
+#define QOIR_FREE(ptr)                                              \
+  qoir_private_free(options ? options->contextual_free_func : NULL, \
+                    options ? options->memory_func_context : NULL, ptr)
+
+static inline void*                                  //
+qoir_private_malloc(                                 //
+    void* (*contextual_malloc_func)(void*, size_t),  //
+    void* memory_func_context,                       //
+    size_t len) {
+  if (contextual_malloc_func) {
+    return (*contextual_malloc_func)(memory_func_context, len);
+  }
+  return malloc(len);
+}
+
+static inline void                               //
+qoir_private_free(                               //
+    void (*contextual_free_func)(void*, void*),  //
+    void* memory_func_context,                   //
+    void* ptr) {
+  if (contextual_free_func) {
+    (*contextual_free_func)(memory_func_context, ptr);
+    return;
+  }
+  free(ptr);
+}
+
+// -------- Status Messages
+
+const char qoir_lz4_status_message__error_dst_is_too_short[] =  //
+    "#qoir/lz4: dst is too short";
+const char qoir_lz4_status_message__error_invalid_data[] =  //
+    "#qoir/lz4: invalid data";
+const char qoir_lz4_status_message__error_src_is_too_long[] =  //
+    "#qoir/lz4: src is too long";
+
+const char qoir_status_message__error_invalid_argument[] =  //
+    "#qoir: invalid argument";
+const char qoir_status_message__error_invalid_data[] =  //
+    "#qoir: invalid data";
+const char qoir_status_message__error_out_of_memory[] =  //
+    "#qoir: out of memory";
+const char qoir_status_message__error_unsupported_metadata_size[] =  //
+    "#qoir: unsupported metadata size";
+const char qoir_status_message__error_unsupported_pixbuf_dimensions[] =  //
+    "#qoir: unsupported pixbuf dimensions";
+const char qoir_status_message__error_unsupported_pixfmt[] =  //
+    "#qoir: unsupported pixfmt";
+const char qoir_status_message__error_unsupported_tile_format[] =  //
+    "#qoir: unsupported tile format";
+
+// -------- Pixel Swizzlers
+
+// The DST and SRC in qoir_private_swizzle__DST__SRC means:
+//  - bgr,  rgb  = 3 bytes per pixel, opaque.
+//  - bgra, rgba = 4 bytes per pixel, some sort of alpha.
+//  - bgrn, rgbn = 4 bytes per pixel, nonpremultiplied alpha.
+//  - bgrp, rgbp = 4 bytes per pixel, premultiplied alpha.
+//  - bgrx, rgbx = 4 bytes per pixel, opaque (every 4th byte is ignored).
+//
+// As for bgr versus rgb, letter order matches in-memory byte order,
+// independent of endianness.
+//
+// Unlike PNG, it's always 8 bits per channel, in memory. No more, no less.
+// However, when converting between nonpremultiplied and premultiplied alpha,
+// the computation happens in 16-bit space (and hence the multiplication by one
+// or two factors of 0x101).
+//
+// Working in the higher bit depth can produce slightly different (and arguably
+// slightly more accurate) results. For example, given 8-bit blue and alpha of
+// 0x80 and 0x81:
+//
+//  - ((0x80   * 0x81  ) / 0xFF  )      = 0x40        = 0x40
+//  - ((0x8080 * 0x8181) / 0xFFFF) >> 8 = 0x4101 >> 8 = 0x41
+
+typedef void (*qoir_private_swizzle_func)(  //
+    uint8_t* QOIR_RESTRICT dst_ptr,         //
+    size_t dst_stride_in_bytes,             //
+    const uint8_t* QOIR_RESTRICT src_ptr,   //
+    size_t src_stride_in_bytes,             //
+    size_t width_in_pixels,                 //
+    size_t height_in_pixels);
+
+static void                                //
+qoir_private_swizzle__copy_4(              //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  size_t n = 4 * width_in_pixels;
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    memcpy(dst_ptr, src_ptr, n);
+    dst_ptr += dst_stride_in_bytes;
+    src_ptr += src_stride_in_bytes;
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgr__bgrn(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgr__bgrp(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s2;
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgr__rgbn(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgr__rgbp(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+    }
+    dst_ptr += dst_stride_in_bytes - (3 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__bgr(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__bgrx(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__rgb(           //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (3 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__rgba(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = s3;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgra__rgbx(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      src_ptr++;
+      *dst_ptr++ = s2;
+      *dst_ptr++ = s1;
+      *dst_ptr++ = s0;
+      *dst_ptr++ = 0xFF;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrn__bgrp(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      if (s3 == 0xFF) {
+        *dst_ptr++ = s0;
+        *dst_ptr++ = s1;
+        *dst_ptr++ = s2;
+        *dst_ptr++ = s3;
+      } else if (s3 == 0x00) {
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+      } else {
+        const uint32_t ffff_101 = 0xFFFF * 0x101;
+        uint32_t alpha_101 = (uint32_t)s3 * 0x101;
+        *dst_ptr++ = (uint8_t)(((s0 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s1 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s2 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = s3;
+      }
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrn__rgbp(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      if (s3 == 0xFF) {
+        *dst_ptr++ = s0;
+        *dst_ptr++ = s1;
+        *dst_ptr++ = s2;
+        *dst_ptr++ = s3;
+      } else if (s3 == 0x00) {
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+        *dst_ptr++ = 0x00;
+      } else {
+        const uint32_t ffff_101 = 0xFFFF * 0x101;
+        uint32_t alpha_101 = (uint32_t)s3 * 0x101;
+        *dst_ptr++ = (uint8_t)(((s2 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s1 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = (uint8_t)(((s0 * ffff_101) / alpha_101) >> 8);
+        *dst_ptr++ = s3;
+      }
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrp__bgrn(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = s3;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+static void                                //
+qoir_private_swizzle__bgrp__rgbn(          //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_stride_in_bytes,            //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_stride_in_bytes,            //
+    size_t width_in_pixels,                //
+    size_t height_in_pixels) {
+  for (; height_in_pixels > 0; height_in_pixels--) {
+    for (size_t n = width_in_pixels; n > 0; n--) {
+      uint8_t s0 = *src_ptr++;
+      uint8_t s1 = *src_ptr++;
+      uint8_t s2 = *src_ptr++;
+      uint8_t s3 = *src_ptr++;
+      uint32_t alpha_101_101 = ((uint32_t)s3) * (0x101 * 0x101);
+      *dst_ptr++ = (uint8_t)(((s2 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s1 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = (uint8_t)(((s0 * alpha_101_101) / 0xFFFF) >> 8);
+      *dst_ptr++ = s3;
+    }
+    dst_ptr += dst_stride_in_bytes - (4 * width_in_pixels);
+    src_ptr += src_stride_in_bytes - (4 * width_in_pixels);
+  }
+}
+
+// -------- LZ4 Decode
+
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_decode(                     //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_len,                        //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_len) {
+  qoir_size_result result = {0};
+
+  if (src_len > QOIR_LZ4_BLOCK_DECODE_MAX_INCL_SRC_LEN) {
+    result.status_message = qoir_lz4_status_message__error_src_is_too_long;
+    return result;
+  }
+
+#if defined(QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY)
+  int n =
+      LZ4_decompress_safe((const char*)src_ptr, (char*)dst_ptr, (int)src_len,
+                          ((dst_len > INT_MAX) ? INT_MAX : (int)dst_len));
+  if (n < 0) {
+    result.status_message = qoir_lz4_status_message__error_invalid_data;
+    return result;
+  }
+  result.value = n;
+  return result;
+
+#else
+  uint8_t* const original_dst_ptr = dst_ptr;
+
+  // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for file
+  // format details, such as the LZ4 token's bit patterns.
+  while (src_len > 0) {
+    uint32_t token = *src_ptr++;
+    src_len--;
+
+    uint32_t literal_len = token >> 4;
+    if (literal_len > 0) {
+      if (literal_len == 15) {
+        while (1) {
+          if (src_len == 0) {
+            goto fail_invalid_data;
+          }
+          uint32_t s = *src_ptr++;
+          src_len--;
+          literal_len += s;
+          if (s != 255) {
+            break;
+          }
+        }
+      }
+
+      if (literal_len > src_len) {
+        goto fail_invalid_data;
+      } else if (literal_len > dst_len) {
+        result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
+        return result;
+      }
+      memcpy(dst_ptr, src_ptr, literal_len);
+      dst_ptr += literal_len;
+      dst_len -= literal_len;
+      src_ptr += literal_len;
+      src_len -= literal_len;
+      if (src_len == 0) {
+        result.value = ((size_t)(dst_ptr - original_dst_ptr));
+        return result;
+      }
+    }
+
+    if (src_len < 2) {
+      goto fail_invalid_data;
+    }
+    uint32_t copy_off = ((uint32_t)src_ptr[0]) | (((uint32_t)src_ptr[1]) << 8);
+    src_ptr += 2;
+    src_len -= 2;
+    if ((copy_off == 0) ||  //
+        (copy_off > ((size_t)(dst_ptr - original_dst_ptr)))) {
+      goto fail_invalid_data;
+    }
+
+    uint32_t copy_len = (token & 15) + 4;
+    if (copy_len == 19) {
+      while (1) {
+        if (src_len == 0) {
+          goto fail_invalid_data;
+        }
+        uint32_t s = *src_ptr++;
+        src_len--;
+        copy_len += s;
+        if (s != 255) {
+          break;
+        }
+      }
+    }
+
+    if (dst_len < copy_len) {
+      result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
+      return result;
+    }
+    dst_len -= copy_len;
+    for (const uint8_t* from = dst_ptr - copy_off; copy_len > 0; copy_len--) {
+      *dst_ptr++ = *from++;
+    }
+  }
+
+fail_invalid_data:
+  result.status_message = qoir_lz4_status_message__error_invalid_data;
+  return result;
+#endif  // QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY
+}
+
+// -------- LZ4 Encode
+
+#define QOIR_LZ4_HASH_TABLE_SHIFT 12
+
+static inline uint32_t  //
+qoir_lz4_private_hash(  //
+    uint32_t x) {
+  // 2654435761u is Knuth's magic constant.
+  return (x * 2654435761u) >> (32 - QOIR_LZ4_HASH_TABLE_SHIFT);
+}
+
+static inline size_t                     //
+qoir_lz4_private_longest_common_prefix(  //
+    const uint8_t* p,                    //
+    const uint8_t* q,                    //
+    const uint8_t* p_limit) {
+  const uint8_t* const original_p = p;
+  size_t n = p_limit - p;
+  while ((n >= 4) &&
+         (qoir_private_peek_u32le(p) == qoir_private_peek_u32le(q))) {
+    p += 4;
+    q += 4;
+    n -= 4;
+  }
+  while ((n > 0) && (*p == *q)) {
+    p += 1;
+    q += 1;
+    n -= 1;
+  }
+  return (size_t)(p - original_p);
+}
+
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_encode_worst_case_dst_len(  //
+    size_t src_len) {
+  qoir_size_result result = {0};
+
+  if (src_len > QOIR_LZ4_BLOCK_ENCODE_MAX_INCL_SRC_LEN) {
+    result.status_message = qoir_lz4_status_message__error_src_is_too_long;
+    return result;
+  }
+  // For the curious, if (src_len <= 0x7E000000) then (value <= 0x7E7E7E8E).
+  result.value = src_len + (src_len / 255) + 16;
+  return result;
+}
+
+QOIR_MAYBE_STATIC qoir_size_result         //
+qoir_lz4_block_encode(                     //
+    uint8_t* QOIR_RESTRICT dst_ptr,        //
+    size_t dst_len,                        //
+    const uint8_t* QOIR_RESTRICT src_ptr,  //
+    size_t src_len) {
+  // This function does not switch on QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY.
+  // We'd like the encoder's output to be the same regardless of configuration.
+
+  qoir_size_result result = qoir_lz4_block_encode_worst_case_dst_len(src_len);
+  if (result.status_message) {
+    return result;
+  } else if (result.value > dst_len) {
+    result.status_message = qoir_lz4_status_message__error_dst_is_too_short;
+    result.value = 0;
+    return result;
+  }
+  result.value = 0;
+
+  uint8_t* dp = dst_ptr;
+  const uint8_t* sp = src_ptr;
+  const uint8_t* literal_start = src_ptr;
+
+  // See https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md for "The
+  // last match must start at least 12 bytes before the end of block" and other
+  // file format details, such as the LZ4 token's bit patterns.
+  if (src_len > 12) {
+    const uint8_t* const match_limit = src_ptr + src_len - 5;
+    const size_t final_literals_limit = src_len - 11;
+
+    // hash_table maps from QOIR_LZ4_HASH_TABLE_SHIFT-bit keys to 32-bit
+    // values. Each value is an offset o, relative to src_ptr, initialized to
+    // zero. Each key, when set, is a hash of 4 bytes src_ptr[o .. o+4].
+    uint32_t hash_table[1 << QOIR_LZ4_HASH_TABLE_SHIFT] = {0};
+
+    while (1) {
+      // Start with 1-byte steps, accelerating when not finding any matches
+      // (e.g. when compressing binary data, not text data).
+      size_t step = 1;
+      size_t step_counter = 1 << 6;
+
+      // Start with a non-empty literal.
+      const uint8_t* next_sp = sp + 1;
+      uint32_t next_hash =
+          qoir_lz4_private_hash(qoir_private_peek_u32le(next_sp));
+
+      // Find a match or goto final_literals.
+      const uint8_t* match = NULL;
+      do {
+        sp = next_sp;
+        next_sp += step;
+        step = step_counter++ >> 6;
+        if ((next_sp - src_ptr) > final_literals_limit) {
+          goto final_literals;
+        }
+        uint32_t* hash_table_entry = &hash_table[next_hash];
+        match = src_ptr + *hash_table_entry;
+        next_hash = qoir_lz4_private_hash(qoir_private_peek_u32le(next_sp));
+        *hash_table_entry = (uint32_t)(sp - src_ptr);
+      } while (((sp - match) > 0xFFFF) ||
+               (qoir_private_peek_u32le(sp) != qoir_private_peek_u32le(match)));
+
+      // Extend the match backwards.
+      while ((sp > literal_start) && (match > src_ptr) &&
+             (sp[-1] == match[-1])) {
+        sp--;
+        match--;
+      }
+
+      // Emit half of the LZ4 token, encoding the literal length. We'll fix up
+      // the other half later.
+      uint8_t* token = dp;
+      size_t literal_len = (size_t)(sp - literal_start);
+      if (literal_len < 15) {
+        *dp++ = (uint8_t)(literal_len << 4);
+      } else {
+        size_t n = literal_len - 15;
+        *dp++ = 0xF0;
+        for (; n >= 255; n -= 255) {
+          *dp++ = 0xFF;
+        }
+        *dp++ = (uint8_t)n;
+      }
+      memcpy(dp, literal_start, literal_len);
+      dp += literal_len;
+
+      while (1) {
+        // At this point:
+        //  - sp    points to the start of the match's later   copy.
+        //  - match points to the start of the match's earlier copy.
+        //  - token points to the LZ4 token.
+
+        // Calculate the match length and update the token's other half.
+        size_t copy_off = (size_t)(sp - match);
+        *dp++ = (uint8_t)(copy_off >> 0);
+        *dp++ = (uint8_t)(copy_off >> 8);
+        size_t adj_copy_len = qoir_lz4_private_longest_common_prefix(
+            4 + sp, 4 + match, match_limit);
+        if (adj_copy_len < 15) {
+          *token |= (uint8_t)adj_copy_len;
+        } else {
+          size_t n = adj_copy_len - 15;
+          *token |= 0x0F;
+          for (; n >= 255; n -= 255) {
+            *dp++ = 0xFF;
+          }
+          *dp++ = (uint8_t)n;
+        }
+        sp += 4 + adj_copy_len;
+
+        // Update the literal_start and check the final_literals_limit.
+        literal_start = sp;
+        if ((sp - src_ptr) >= final_literals_limit) {
+          goto final_literals;
+        }
+
+        // We've skipped over hashing everything within the match. Also, the
+        // minimum match length is 4. Update the hash table for one of those
+        // skipped positions.
+        hash_table[qoir_lz4_private_hash(qoir_private_peek_u32le(sp - 2))] =
+            (uint32_t)(sp - 2 - src_ptr);
+
+        // Check if this match can be followed immediately by another match.
+        // If so, continue the loop. Otherwise, break.
+        uint32_t* hash_table_entry =
+            &hash_table[qoir_lz4_private_hash(qoir_private_peek_u32le(sp))];
+        uint32_t old_offset = *hash_table_entry;
+        uint32_t new_offset = (uint32_t)(sp - src_ptr);
+        *hash_table_entry = new_offset;
+        match = src_ptr + old_offset;
+        if (((new_offset - old_offset) > 0xFFFF) ||
+            (qoir_private_peek_u32le(sp) != qoir_private_peek_u32le(match))) {
+          break;
+        }
+        token = dp++;
+        *token = 0;
+      }
+    }
+  }
+
+final_literals:
+  do {
+    size_t final_literal_len = src_len - (size_t)(literal_start - src_ptr);
+    if (final_literal_len < 15) {
+      *dp++ = (uint8_t)(final_literal_len << 4);
+    } else {
+      size_t n = final_literal_len - 15;
+      *dp++ = 0xF0;
+      for (; n >= 255; n -= 255) {
+        *dp++ = 0xFF;
+      }
+      *dp++ = (uint8_t)n;
+    }
+    memcpy(dp, literal_start, final_literal_len);
+    dp += final_literal_len;
+  } while (0);
+
+  result.value = (size_t)(dp - dst_ptr);
+  return result;
+}
+
+// -------- QOIR Decode
+
+QOIR_MAYBE_STATIC qoir_decode_pixel_configuration_result  //
+qoir_decode_pixel_configuration(                          //
+    const uint8_t* src_ptr,                               //
+    size_t src_len) {
+  qoir_decode_pixel_configuration_result result = {0};
+
+  if ((src_len < 20) ||
+      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
+    result.status_message = qoir_status_message__error_invalid_data;
+    return result;
+  }
+  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
+  if ((qoir_chunk_payload_len < 8) ||
+      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull)) {
+    result.status_message = qoir_status_message__error_invalid_data;
+    return result;
+  }
+
+  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
+  uint32_t width_in_pixels = 0xFFFFFF & header0;
+  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
+  switch (src_pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      break;
+    default:
+      result.status_message = qoir_status_message__error_invalid_data;
+      return result;
+  }
+  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
+  uint32_t height_in_pixels = 0xFFFFFF & header1;
+
+  result.dst_pixcfg.pixfmt = src_pixfmt;
+  result.dst_pixcfg.width_in_pixels = width_in_pixels;
+  result.dst_pixcfg.height_in_pixels = height_in_pixels;
+  return result;
+}
+
+static qoir_private_swizzle_func          //
+qoir_private_choose_decode_swizzle_func(  //
+    qoir_pixel_format dst_pixfmt,         //
+    qoir_pixel_format src_pixfmt) {
+  switch (dst_pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__copy_4;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgrp__bgrn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__copy_4;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__bgrx;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__copy_4;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgrn__bgrp;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__bgrx;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgrp__bgrn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__copy_4;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__BGR:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgr__bgrp;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgr__bgrn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgr__bgrp;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__RGBX:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__rgba;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgrp__rgbn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgra__rgba;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__rgbx;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgra__rgba;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgrn__rgbp;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgra__rgbx;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgrp__rgbn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgra__rgba;
+      }
+      break;
+
+    case QOIR_PIXEL_FORMAT__RGB:
+      switch (src_pixfmt) {
+        case QOIR_PIXEL_FORMAT__BGRX:
+          return qoir_private_swizzle__bgr__rgbp;
+        case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+          return qoir_private_swizzle__bgr__rgbn;
+        case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+          return qoir_private_swizzle__bgr__rgbp;
+      }
+      break;
+  }
+
+  return NULL;
+}
+
+// Callers should pass (QOIR_LITERALS_PRE_PADDING + (4 * tw * th)) for dst_len,
+// so that the decode loop can always refer (by a simple offset of -4) to the
+// pixel left of the current pixel.
+//
+// Callers should pass (opcode_stream_length + 8) for src_len so that the
+// decode loop can always peek for 8 bytes, even at the end of the stream.
+// Reference: §
+static qoir_size_result            //
+qoir_private_decode_tile_opcodes(  //
+    uint8_t* dst_ptr,              //
+    size_t dst_len,                //
+    const uint8_t* src_ptr,        //
+    size_t src_len) {
+  qoir_size_result result = {0};
+
+  if ((dst_len < QOIR_LITERALS_PRE_PADDING) || (src_len < 8)) {
+    result.status_message = qoir_status_message__error_invalid_argument;
+    return result;
+  }
+
+  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
+  // for performance. It is always indexed by a uint8_t value that is a
+  // multiple of four. The four uint8_t elements are in B, G, R, A order.
+  uint8_t color_cache[256];
+  for (int i = 0; i < 256; i += 4) {
+    color_cache[i + 0] = 0x00;
+    color_cache[i + 1] = 0x00;
+    color_cache[i + 2] = 0x00;
+    color_cache[i + 3] = 0xFF;
+  }
+  uint8_t next_color_index = 0;
+
+  uint8_t* dp = dst_ptr + QOIR_LITERALS_PRE_PADDING;
+  uint8_t* dq = dst_ptr + dst_len;
+  const uint8_t* sp = src_ptr;
+  const uint8_t* sq = src_ptr + src_len - 8;
+  while (dp < dq) {
+    if (sp >= sq) {
+      result.status_message = qoir_status_message__error_invalid_data;
+      return result;
+    }
+
+    uint8_t pixel[4];
+    memcpy(pixel, dp - 4, 4);
+
+    uint64_t s64 = qoir_private_peek_u64le(sp);
+    if ((s64 & 0xFF) == 0xF7) {  // QOIR_OP_BGR8
+      pixel[0] += (uint8_t)(s64 >> 0x08);
+      pixel[1] += (uint8_t)(s64 >> 0x10);
+      pixel[2] += (uint8_t)(s64 >> 0x18);
+      sp += 4;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0x03) == 0) {  // QOIR_OP_INDEX
+      sp += 1;
+      memcpy(pixel, color_cache + (uint8_t)s64, 4);
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0x03) == 1) {  // QOIR_OP_BGR2
+      uint32_t delta8x4 = (uint32_t)(((s64 >> 0x02) & 0x000003) |  //
+                                     ((s64 << 0x04) & 0x000300) |  //
+                                     ((s64 << 0x0A) & 0x030000));
+      delta8x4 = QOIR_SWAR_PSUBB(delta8x4, 0x020202);
+      uint32_t pixel8x4;
+      memcpy(&pixel8x4, pixel, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
+          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
+#else
+      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
+#endif
+      memcpy(pixel, &pixel8x4, 4);
+
+      sp += 1;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0x03) == 2) {  // QOIR_OP_LUMA
+#if !defined(QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES)
+      uint32_t delta8x4;
+      memcpy(&delta8x4, qoir_private_table_luma - 2 + (uint16_t)s64, 4);
+      uint32_t pixel8x4;
+      memcpy(&pixel8x4, pixel, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
+          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
+#else
+      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
+#endif
+      memcpy(pixel, &pixel8x4, 4);
+#else
+      uint8_t delta_g = ((uint8_t)s64 >> 0x02) - 32;
+      pixel[0] += delta_g - 8 + ((s64 >> 0x08) & 0x0F);
+      pixel[1] += delta_g;
+      pixel[2] += delta_g - 8 + ((s64 >> 0x0C) & 0x0F);
+#endif
+      sp += 2;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0x07) == 3) {  // QOIR_OP_BGR7
+      uint32_t delta8x4 = (uint32_t)((((s64 >> 0x03) - 0x000040) & 0x00007F) |
+                                     (((s64 >> 0x02) - 0x004000) & 0x007F00) |
+                                     (((s64 >> 0x01) - 0x400000) & 0x7F0000));
+      delta8x4 |= (delta8x4 & 0x404040) << 1;
+      uint32_t pixel8x4;
+      memcpy(&pixel8x4, pixel, 4);
+#if defined(QOIR_USE_SIMD_SSE2)
+      pixel8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_add_epi8(
+          _mm_cvtsi32_si128((int)pixel8x4), _mm_cvtsi32_si128((int)delta8x4)));
+#else
+      pixel8x4 = QOIR_SWAR_PADDB(pixel8x4, delta8x4);
+#endif
+      memcpy(pixel, &pixel8x4, 4);
+      sp += 3;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0xFF) < 0xD7) {  // QOIR_OP_RUNS
+      size_t run_length = (s64 & 0xFF) >> 0x03;
+      if ((dq - dp) < (4 * (run_length + 1))) {
+        result.status_message = qoir_status_message__error_invalid_data;
+        return result;
+      }
+      do {
+        memcpy(dp, pixel, 4);
+        dp += 4;
+      } while (run_length--);
+      sp += 1;
+
+    } else if ((s64 & 0xFF) == 0xD7) {  // QOIR_OP_RUNL
+      size_t run_length = (s64 >> 0x08) & 0xFF;
+      if ((dq - dp) < (4 * (run_length + 1))) {
+        result.status_message = qoir_status_message__error_invalid_data;
+        return result;
+      }
+      do {
+        memcpy(dp, pixel, 4);
+        dp += 4;
+      } while (run_length--);
+      sp += 2;
+
+    } else if ((s64 & 0xFF) == 0xDF) {  // QOIR_OP_BGRA2
+      pixel[0] += ((s64 >> 0x08) & 0x03) - 2;
+      pixel[1] += ((s64 >> 0x0A) & 0x03) - 2;
+      pixel[2] += ((s64 >> 0x0C) & 0x03) - 2;
+      pixel[3] += ((s64 >> 0x0E) & 0x03) - 2;
+      sp += 2;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0xFF) == 0xE7) {  // QOIR_OP_BGRA4
+      pixel[0] += ((s64 >> 0x08) & 0x0F) - 8;
+      pixel[1] += ((s64 >> 0x0C) & 0x0F) - 8;
+      pixel[2] += ((s64 >> 0x10) & 0x0F) - 8;
+      pixel[3] += ((s64 >> 0x14) & 0x0F) - 8;
+      sp += 3;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else if ((s64 & 0xFF) == 0xEF) {  // QOIR_OP_BGRA8
+      pixel[0] += (uint8_t)(s64 >> 0x08);
+      pixel[1] += (uint8_t)(s64 >> 0x10);
+      pixel[2] += (uint8_t)(s64 >> 0x18);
+      pixel[3] += (uint8_t)(s64 >> 0x20);
+      sp += 5;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+
+    } else {  // QOIR_OP_A8
+      pixel[3] += (uint8_t)(s64 >> 0x08);
+      sp += 2;
+      memcpy(color_cache + next_color_index, pixel, 4);
+      next_color_index += 4;
+      memcpy(dp, pixel, 4);
+      dp += 4;
+    }
+  }
+
+  if (sp != sq) {
+    result.status_message = qoir_status_message__error_invalid_data;
+    return result;
+  }
+  result.value = (size_t)(dp - dst_ptr);
+  return result;
+}
+
+static const char*                      //
+qoir_private_decode_qpix_payload(       //
+    qoir_decode_buffer* decbuf,         //
+    qoir_pixel_buffer dst_pixbuf,       //
+    qoir_rectangle dst_clip_rectangle,  //
+    qoir_pixel_format src_pixfmt,       //
+    uint32_t src_width_in_pixels,       //
+    uint32_t src_height_in_pixels,      //
+    const uint8_t* src_ptr,             //
+    size_t src_len,                     //
+    qoir_rectangle src_clip_rectangle,  //
+    int32_t offset_x,                   //
+    int32_t offset_y,                   //
+    uint32_t lossiness) {
+  qoir_rectangle dst_clip_rect =
+      qoir_make_rectangle(0, 0, (int32_t)dst_pixbuf.pixcfg.width_in_pixels,
+                          (int32_t)dst_pixbuf.pixcfg.height_in_pixels);
+  dst_clip_rect = qoir_rectangle__intersect(dst_clip_rect, dst_clip_rectangle);
+  qoir_rectangle dst_clip_rect_in_src_space;
+  dst_clip_rect_in_src_space.x0 = dst_clip_rect.x0 - offset_x;
+  dst_clip_rect_in_src_space.y0 = dst_clip_rect.y0 - offset_y;
+  dst_clip_rect_in_src_space.x1 = dst_clip_rect.x1 - offset_x;
+  dst_clip_rect_in_src_space.y1 = dst_clip_rect.y1 - offset_y;
+
+  size_t height_in_tiles =
+      qoir_calculate_number_of_tiles_1d(src_height_in_pixels);
+  size_t width_in_tiles =
+      qoir_calculate_number_of_tiles_1d(src_width_in_pixels);
+  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
+    goto done;
+  }
+  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
+  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
+
+  qoir_private_swizzle_func swizzle_func =
+      qoir_private_choose_decode_swizzle_func(dst_pixbuf.pixcfg.pixfmt,
+                                              src_pixfmt);
+  if (!swizzle_func) {
+    return qoir_status_message__error_unsupported_pixfmt;
+  }
+  size_t num_dst_channels =
+      qoir_pixel_format__bytes_per_pixel(dst_pixbuf.pixcfg.pixfmt);
+
+  uint8_t* literals_pre_padding = decbuf->private_impl.literals;
+  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
+    literals_pre_padding[i + 0] = 0x00;
+    literals_pre_padding[i + 1] = 0x00;
+    literals_pre_padding[i + 2] = 0x00;
+    literals_pre_padding[i + 3] = 0xFF;
+  }
+
+  // ty, tx, tw and th are the tile's top-left offset, width and height, all
+  // measured in pixels.
+  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
+    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
+      size_t tw = qoir_private_tile_dimension(tx < tx1, src_width_in_pixels);
+      size_t th = qoir_private_tile_dimension(ty < ty1, src_height_in_pixels);
+      qoir_rectangle src_clip_rect =
+          qoir_make_rectangle((int32_t)(tx + 0), (int32_t)(ty + 0),
+                              (int32_t)(tx + tw), (int32_t)(ty + th));
+      src_clip_rect =
+          qoir_rectangle__intersect(src_clip_rect, src_clip_rectangle);
+      src_clip_rect =
+          qoir_rectangle__intersect(src_clip_rect, dst_clip_rect_in_src_space);
+
+      if (src_len < 4) {
+        return qoir_status_message__error_invalid_data;
+      }
+      uint32_t prefix = qoir_private_peek_u32le(src_ptr);
+      src_ptr += 4;
+      src_len -= 4;
+      size_t tile_len = prefix & 0xFFFFFF;
+      if ((src_len < (tile_len + 8)) ||  //
+          (((4 * QOIR_TS2) < tile_len) && ((prefix >> 31) != 0))) {
+        return qoir_status_message__error_invalid_data;
+      }
+
+      if (qoir_rectangle__is_empty(src_clip_rect)) {
+        src_ptr += tile_len;
+        src_len -= tile_len;
+        continue;
+      }
+
+      const uint8_t* literals = NULL;
+      switch (prefix >> 24) {
+        case 0: {  // Literals tile format.
+          if (tile_len != (4 * tw * th)) {
+            return qoir_status_message__error_invalid_data;
+          }
+          literals = src_ptr;
+          break;
+        }
+        case 1: {  // Opcodes tile format.
+          qoir_size_result r = qoir_private_decode_tile_opcodes(
+              decbuf->private_impl.literals,              //
+              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
+              src_ptr, tile_len + 8);                     // See § for +8.
+          if (r.status_message) {
+            return r.status_message;
+          } else if (r.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
+            return qoir_status_message__error_invalid_data;
+          }
+          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
+          break;
+        }
+        case 2: {  // LZ4-Literals tile format.
+          qoir_size_result r = qoir_lz4_block_decode(
+              decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+              sizeof(decbuf->private_impl.literals) - QOIR_LITERALS_PRE_PADDING,
+              src_ptr, tile_len);
+          if (r.status_message) {
+            return qoir_status_message__error_invalid_data;
+          } else if (r.value != (4 * tw * th)) {
+            return qoir_status_message__error_invalid_data;
+          }
+          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
+          break;
+        }
+        case 3: {  // LZ4-Opcodes tile format.
+          qoir_size_result r0 = qoir_lz4_block_decode(
+              decbuf->private_impl.opcodes,
+              sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
+          if (r0.status_message) {
+            return qoir_status_message__error_invalid_data;
+          }
+          qoir_size_result r1 = qoir_private_decode_tile_opcodes(
+              decbuf->private_impl.literals,                //
+              QOIR_LITERALS_PRE_PADDING + (4 * tw * th),    //
+              decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
+          if (r1.status_message) {
+            return r1.status_message;
+          } else if (r1.value != (QOIR_LITERALS_PRE_PADDING + (4 * tw * th))) {
+            return qoir_status_message__error_invalid_data;
+          }
+          literals = decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
+          break;
+        }
+        default:
+          return qoir_status_message__error_unsupported_tile_format;
+      }
+
+      src_ptr += tile_len;
+      src_len -= tile_len;
+
+      if (lossiness) {
+        uint8_t* p = decbuf->private_impl.opcodes;
+        const uint8_t* q = literals;
+        const uint8_t* unlossify = qoir_private_table_unlossify[lossiness - 1];
+        for (uint32_t i = 4 * tw * th; i > 0; i--) {
+          *p++ = unlossify[*q++];
+        }
+        literals = decbuf->private_impl.opcodes;
+      }
+
+      uint8_t* dp =
+          dst_pixbuf.data +
+          ((src_clip_rect.y0 + offset_y) * dst_pixbuf.stride_in_bytes) +
+          ((src_clip_rect.x0 + offset_x) * num_dst_channels);
+      const uint8_t* sp = literals +
+                          ((src_clip_rect.y0 & QOIR_TILE_MASK) * 4 * tw) +
+                          ((src_clip_rect.x0 & QOIR_TILE_MASK) * 4);
+      (*swizzle_func)(dp, dst_pixbuf.stride_in_bytes, sp, 4 * tw,
+                      qoir_rectangle__width(src_clip_rect),
+                      qoir_rectangle__height(src_clip_rect));
+    }
+  }
+
+done:
+  if (src_len != 8) {
+    return qoir_status_message__error_invalid_data;
+  }
+  return NULL;
+}
+
+static qoir_decode_result               //
+qoir_private_make_decode_result_error(  //
+    const char* status_message) {
+  qoir_decode_result result = {0};
+  result.status_message = status_message;
+  return result;
+}
+
+QOIR_MAYBE_STATIC qoir_decode_result  //
+qoir_decode(                          //
+    const uint8_t* src_ptr,           //
+    const size_t src_len,             //
+    const qoir_decode_options* options) {
+  qoir_decode_result result = {0};
+  qoir_rectangle dst_clip_rectangle =
+      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
+  qoir_rectangle src_clip_rectangle =
+      qoir_make_rectangle(0, 0, 0xFFFFFF, 0xFFFFFF);
+  int32_t offset_x = 0;
+  int32_t offset_y = 0;
+  if (options) {
+    if ((options->pixbuf.pixcfg.width_in_pixels > 0xFFFFFF) ||
+        (options->pixbuf.pixcfg.height_in_pixels > 0xFFFFFF)) {
+      return qoir_private_make_decode_result_error(
+          qoir_status_message__error_unsupported_pixbuf_dimensions);
+    }
+    memcpy(&result.dst_pixbuf, &options->pixbuf, sizeof(options->pixbuf));
+    if (options->use_dst_clip_rectangle) {
+      memcpy(&dst_clip_rectangle, &options->dst_clip_rectangle,
+             sizeof(options->dst_clip_rectangle));
+    }
+    if (options->use_src_clip_rectangle) {
+      memcpy(&src_clip_rectangle, &options->src_clip_rectangle,
+             sizeof(options->src_clip_rectangle));
+    }
+    if ((-0xFFFFFF <= options->offset_x) && (options->offset_x <= 0xFFFFFF) &&
+        (-0xFFFFFF <= options->offset_y) && (options->offset_y <= 0xFFFFFF)) {
+      offset_x = options->offset_x;
+      offset_y = options->offset_y;
+    } else {
+      dst_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
+      src_clip_rectangle = qoir_make_rectangle(0, 0, 0, 0);
+    }
+  }
+
+  if ((src_len < 44) ||
+      (qoir_private_peek_u32le(src_ptr) != 0x52494F51)) {  // "QOIR"le.
+    return qoir_private_make_decode_result_error(
+        qoir_status_message__error_invalid_data);
+  }
+  uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
+  if ((qoir_chunk_payload_len < 8) ||
+      (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
+      (qoir_chunk_payload_len > (src_len - 44))) {
+    return qoir_private_make_decode_result_error(
+        qoir_status_message__error_invalid_data);
+  }
+
+  uint32_t header0 = qoir_private_peek_u32le(src_ptr + 12);
+  uint32_t width_in_pixels = 0xFFFFFF & header0;
+  qoir_pixel_format src_pixfmt = 0x0F & (header0 >> 24);
+  switch (src_pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      break;
+    default:
+      goto fail_invalid_data;
+  }
+  uint32_t header1 = qoir_private_peek_u32le(src_ptr + 16);
+  uint32_t height_in_pixels = 0xFFFFFF & header1;
+  uint32_t lossiness = 0x07 & (header1 >> 24);
+
+  qoir_pixel_format dst_pixfmt =
+      (options && !qoir_pixel_buffer__is_zero(options->pixbuf))
+          ? options->pixbuf.pixcfg.pixfmt
+          : ((options && options->pixfmt) ? options->pixfmt
+                                          : QOIR_PIXEL_FORMAT__RGBA_NONPREMUL);
+  uint64_t dst_width_in_bytes =
+      width_in_pixels * qoir_pixel_format__bytes_per_pixel(dst_pixfmt);
+
+  bool seen_qpix = false;
+  const uint8_t* sp = src_ptr + (12 + qoir_chunk_payload_len);
+  size_t sn = src_len - (12 + qoir_chunk_payload_len);
+  while (1) {
+    if (sn < 12) {
+      goto fail_invalid_data;
+    }
+    uint32_t chunk_type = qoir_private_peek_u32le(sp + 0);
+    uint64_t payload_len = qoir_private_peek_u64le(sp + 4);
+    if (payload_len > 0x7FFFFFFFFFFFFFFFull) {
+      goto fail_invalid_data;
+    }
+    sp += 12;
+    sn -= 12;
+
+    if (chunk_type == 0x52494F51) {  // "QOIR"le.
+      goto fail_invalid_data;
+    } else if (chunk_type == 0x444E4551) {  // "QEND"le.
+      if ((payload_len != 0) || (sn != 0)) {
+        goto fail_invalid_data;
+      }
+      break;
+    }
+
+    // This chunk must be followed by at least the QEND chunk (12 bytes).
+    if ((sn < payload_len) || ((sn - payload_len) < 12)) {
+      goto fail_invalid_data;
+    }
+
+    if (chunk_type == 0x58495051) {  // "QPIX"le.
+      if (seen_qpix) {
+        goto fail_invalid_data;
+      }
+      seen_qpix = true;
+
+      uint64_t pixbuf_len = dst_width_in_bytes * (uint64_t)height_in_pixels;
+      if (pixbuf_len > SIZE_MAX) {
+        return qoir_private_make_decode_result_error(
+            qoir_status_message__error_unsupported_pixbuf_dimensions);
+
+      } else if (pixbuf_len > 0) {
+        if (qoir_pixel_buffer__is_zero(result.dst_pixbuf)) {
+          result.owned_memory = QOIR_MALLOC((size_t)pixbuf_len);
+          if (!result.owned_memory) {
+            return qoir_private_make_decode_result_error(
+                qoir_status_message__error_out_of_memory);
+          }
+          if (options && (options->use_dst_clip_rectangle ||
+                          options->use_src_clip_rectangle)) {
+            memset(result.owned_memory, 0, pixbuf_len);
+          }
+          result.dst_pixbuf.pixcfg.pixfmt = dst_pixfmt;
+          result.dst_pixbuf.pixcfg.width_in_pixels = width_in_pixels;
+          result.dst_pixbuf.pixcfg.height_in_pixels = height_in_pixels;
+          result.dst_pixbuf.data = result.owned_memory;
+          result.dst_pixbuf.stride_in_bytes = dst_width_in_bytes;
+        }
+        qoir_decode_buffer* decbuf = options ? options->decbuf : NULL;
+        bool free_decbuf = false;
+        if (!decbuf) {
+          decbuf = (qoir_decode_buffer*)QOIR_MALLOC(sizeof(qoir_decode_buffer));
+          if (!decbuf) {
+            QOIR_FREE(result.owned_memory);
+            return qoir_private_make_decode_result_error(
+                qoir_status_message__error_out_of_memory);
+          }
+          free_decbuf = true;
+        }
+        const char* status_message = qoir_private_decode_qpix_payload(
+            decbuf, result.dst_pixbuf, dst_clip_rectangle, src_pixfmt,
+            width_in_pixels, height_in_pixels, sp,
+            payload_len + 8,  // See § for +8.
+            src_clip_rectangle, offset_x, offset_y, lossiness);
+        if (free_decbuf) {
+          QOIR_FREE(decbuf);
+        }
+        if (status_message) {
+          QOIR_FREE(result.owned_memory);
+          return qoir_private_make_decode_result_error(status_message);
+        }
+
+      } else if (payload_len != 0) {
+        goto fail_invalid_data;
+      }
+
+    } else if (chunk_type == 0x50434943) {  // "CICP"le.
+      if (result.metadata_cicp_ptr) {
+        goto fail_invalid_data;
+      }
+      result.metadata_cicp_ptr = sp;
+      result.metadata_cicp_len = payload_len;
+
+    } else if (chunk_type == 0x50434349) {  // "ICCP"le.
+      if (result.metadata_iccp_ptr) {
+        goto fail_invalid_data;
+      }
+      result.metadata_iccp_ptr = sp;
+      result.metadata_iccp_len = payload_len;
+
+    } else if (chunk_type == 0x46495845) {  // "EXIF"le.
+      if (result.metadata_exif_ptr) {
+        goto fail_invalid_data;
+      }
+      result.metadata_exif_ptr = sp;
+      result.metadata_exif_len = payload_len;
+
+    } else if (chunk_type == 0x20504D58) {  // "XMP "le.
+      if (result.metadata_xmp_ptr) {
+        goto fail_invalid_data;
+      }
+      result.metadata_xmp_ptr = sp;
+      result.metadata_xmp_len = payload_len;
+    }
+
+    sp += payload_len;
+    sn -= payload_len;
+  }
+
+  if (!seen_qpix) {
+    goto fail_invalid_data;
+  }
+  return result;
+
+fail_invalid_data:
+  QOIR_FREE(result.owned_memory);
+  return qoir_private_make_decode_result_error(
+      qoir_status_message__error_invalid_data);
+}
+
+// -------- QOIR Encode
+
+#define QOIR_HASH_TABLE_SHIFT 10
+
+static QOIR_ALWAYS_INLINE void  //
+qoir_private_encode_dither(     //
+    uint8_t* ptr,               //
+    uint32_t lossiness,         //
+    uint32_t noise) {
+  if (*ptr >= 0xFF) {
+    *ptr = 0xFF >> lossiness;
+    return;
+  }
+
+  // Find the lower (inclusive) and upper (exclusive) quantized values that
+  // bracket the pixel value.
+  uint8_t low_shifted = 0;
+  uint8_t shifted = *ptr >> lossiness;
+  if (shifted > 0) {
+    low_shifted = shifted - 1;
+  }
+  uint8_t* unshift = qoir_private_table_unlossify[lossiness - 1];
+  uint8_t lower = unshift[low_shifted + 0];
+  uint8_t upper = unshift[low_shifted + 1];
+  if (*ptr >= upper) {
+    lower = unshift[low_shifted + 1];
+    upper = unshift[low_shifted + 2];
+  }
+
+  // Compare the pixel's position in that bracket to the noise.
+  uint32_t p = *ptr;
+  uint32_t l = lower;
+  uint32_t u = upper;
+  uint32_t m = ((256 * (p - l)) > (noise * (u - l))) ? u : l;
+  *ptr = (uint8_t)(m >> lossiness);
+}
+
+static QOIR_ALWAYS_INLINE qoir_size_result  //
+qoir_private_encode_tile_opcodes(           //
+    uint8_t* dst_ptr,                       //
+    const uint8_t* src_ptr,                 //
+    uint32_t tw,                            //
+    uint32_t th,                            //
+    bool has_alpha) {
+  // dists holds the log2 distance from zero (with modular arithmetic).
+  //  - There is    1 element  such that (dists[i] <   1).
+  //  - There are   2 elements such that (dists[i] <   2).
+  //  - There are   4 elements such that (dists[i] <   4).
+  //  - There are   8 elements such that (dists[i] <   8).
+  //  - etc.
+  //  - There are 128 elements such that (dists[i] < 128).
+  //  - There are 256 elements such that (dists[i] < 256).
+  //
+  // The table was generated by script/gen_table_dists.go
+  static const uint8_t dists[256] = {
+      0x00, 0x02, 0x04, 0x04, 0x08, 0x08, 0x08, 0x08,  //
+      0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,  //
+      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
+      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,  //
+      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
+      0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,  //
+      0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,  //
+      0x08, 0x08, 0x08, 0x08, 0x04, 0x04, 0x02, 0x01,  //
+  };
+
+  qoir_size_result result = {0};
+
+  uint32_t run_length = 0;
+
+  // color_cache is conceptually "uint8_t color_cache[64][4]" but is flattened
+  // for performance. It is always indexed by a uint8_t value that is a
+  // multiple of four. The four uint8_t elements are in B, G, R, A order.
+  uint8_t color_cache[256];
+  for (int i = 0; i < 256; i += 4) {
+    color_cache[i + 0] = 0x00;
+    color_cache[i + 1] = 0x00;
+    color_cache[i + 2] = 0x00;
+    color_cache[i + 3] = 0xFF;
+  }
+  uint8_t next_color_index = 0;
+  uint8_t color_indexes[1 << QOIR_HASH_TABLE_SHIFT] = {0};
+
+  uint8_t* dp = dst_ptr;
+  const uint8_t* sp = src_ptr + QOIR_LITERALS_PRE_PADDING;
+  const uint8_t* sq =
+      src_ptr + QOIR_LITERALS_PRE_PADDING + (4 * (size_t)tw * (size_t)th);
+  for (; sp < sq; sp += 4) {
+    if (!memcmp(sp, sp - 4, 4)) {
+      run_length++;
+      if (run_length == 256) {
+        *dp++ = 0xD7;  // QOIR_OP_RUNL
+        *dp++ = 0xFF;
+        run_length = 0;
+      }
+      continue;
+    }
+
+    if (run_length > 0) {
+      if (run_length <= 26) {
+        *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
+        run_length = 0;
+      } else {
+        *dp++ = 0xD7;  // QOIR_OP_RUNL
+        *dp++ = (uint8_t)(run_length - 1);
+        run_length = 0;
+      }
+    }
+
+    // 2654435761u is Knuth's magic constant.
+    uint32_t hash = (qoir_private_peek_u32le(sp) * 2654435761u) >>
+                    (32 - QOIR_HASH_TABLE_SHIFT);
+    uint8_t index = color_indexes[hash];
+    if (!memcmp(color_cache + index, sp, 4)) {
+      *dp++ = (uint8_t)(0x00 | index);  // QOIR_OP_INDEX
+      continue;
+    }
+
+    color_indexes[hash] = next_color_index;
+    memcpy(color_cache + next_color_index, sp, 4);
+    next_color_index += 4;
+
+    uint8_t delta[4];
+    uint32_t cp8x4;  // Current pixel.
+    uint32_t pl8x4;  // Pixel left.
+    memcpy(&cp8x4, sp, 4);
+    memcpy(&pl8x4, sp - 4, 4);
+    // Either code path is equivalent to (but faster than):
+    //   delta[i] = sp[i] - sp[i - 4];
+    // for i in 0..4.
+#if defined(QOIR_USE_SIMD_SSE2)
+    uint32_t delta8x4 = (uint32_t)_mm_cvtsi128_si32(_mm_sub_epi8(
+        _mm_cvtsi32_si128((int)cp8x4), _mm_cvtsi32_si128((int)pl8x4)));
+#else
+    uint32_t delta8x4 = QOIR_SWAR_PSUBB(cp8x4, pl8x4);
+#endif
+    memcpy(delta, &delta8x4, 4);
+
+    if (!has_alpha || (delta[3] == 0)) {
+      uint8_t dist02 = dists[delta[0]] | dists[delta[2]];
+      uint8_t dist1 = dists[delta[1]];
+      uint8_t dist = dist02 | dist1;
+
+      uint8_t d0d1 = delta[0] - delta[1];
+      uint8_t d2d1 = delta[2] - delta[1];
+
+      if (dist < 0x04) {
+        *dp++ = 0x01 |                         // QOIR_OP_BGR2
+                ((delta[0] + 0x02) << 0x02) |  //
+                ((delta[1] + 0x02) << 0x04) |  //
+                ((delta[2] + 0x02) << 0x06);
+
+      } else if (!((dist1 >> 6) | (dists[d0d1] >> 4) | (dists[d2d1] >> 4))) {
+        *dp++ = 0x02 |                        // QOIR_OP_LUMA
+                ((delta[1] + 0x20) << 0x02);  //
+        *dp++ = ((d0d1 + 0x08) << 0x00) |     //
+                ((d2d1 + 0x08) << 0x04);
+
+      } else if (dist < 0x80) {
+        qoir_private_poke_u32le(
+            dp,
+            0x03 |  // QOIR_OP_BGR7
+                ((uint32_t)(uint8_t)(delta[0] + 0x40) << 0x03) |
+                ((uint32_t)(uint8_t)(delta[1] + 0x40) << 0x0A) |
+                ((uint32_t)(uint8_t)(delta[2] + 0x40) << 0x11));
+        dp += 3;
+
+      } else {
+        *dp++ = 0xF7;  // QOIR_OP_BGR8
+        *dp++ = delta[0];
+        *dp++ = delta[1];
+        *dp++ = delta[2];
+      }
+
+    } else if ((delta[0] | delta[1] | delta[2]) == 0) {
+      *dp++ = 0xFF;  // QOIR_OP_A8
+      *dp++ = delta[3];
+
+    } else {
+      uint8_t dist =
+          dists[delta[0]] | dists[delta[1]] | dists[delta[2]] | dists[delta[3]];
+      if (dist < 0x04) {
+        *dp++ = 0xDF;                          // QOIR_OP_BGRA2
+        *dp++ = ((delta[0] + 0x02) << 0x00) |  //
+                ((delta[1] + 0x02) << 0x02) |  //
+                ((delta[2] + 0x02) << 0x04) |  //
+                ((delta[3] + 0x02) << 0x06);
+      } else if (dist < 0x10) {
+        *dp++ = 0xE7;                          // QOIR_OP_BGRA4
+        *dp++ = ((delta[0] + 0x08) << 0x00) |  //
+                ((delta[1] + 0x08) << 0x04);   //
+        *dp++ = ((delta[2] + 0x08) << 0x00) |  //
+                ((delta[3] + 0x08) << 0x04);
+      } else {
+        *dp++ = 0xEF;  // QOIR_OP_BGRA8
+        *dp++ = delta[0];
+        *dp++ = delta[1];
+        *dp++ = delta[2];
+        *dp++ = delta[3];
+      }
+    }
+  }
+
+  if (run_length > 0) {
+    if (run_length <= 26) {
+      *dp++ = (uint8_t)(0x07 | ((run_length - 1) << 0x03));  // QOIR_OP_RUNS
+      run_length = 0;
+    } else {
+      *dp++ = 0xD7;  // QOIR_OP_RUNL
+      *dp++ = (uint8_t)(run_length - 1);
+      run_length = 0;
+    }
+  }
+
+  result.value = (size_t)(dp - dst_ptr);
+  return result;
+}
+
+static qoir_size_result                       //
+qoir_private_encode_tile_opcodes_sans_alpha(  //
+    uint8_t* dst_ptr,                         //
+    const uint8_t* src_ptr,                   //
+    uint32_t tw,                              //
+    uint32_t th) {
+  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, false);
+}
+
+static qoir_size_result                       //
+qoir_private_encode_tile_opcodes_with_alpha(  //
+    uint8_t* dst_ptr,                         //
+    const uint8_t* src_ptr,                   //
+    uint32_t tw,                              //
+    uint32_t th) {
+  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, true);
+}
+
+static qoir_size_result                   //
+qoir_private_encode_qpix_payload(         //
+    qoir_encode_buffer* encbuf,           //
+    uint8_t* dst_ptr,                     //
+    const qoir_pixel_buffer* src_pixbuf,  //
+    uint32_t lossiness,                   //
+    bool dither) {
+  qoir_size_result result = {0};
+
+  size_t height_in_tiles =
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.height_in_pixels);
+  size_t width_in_tiles =
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.width_in_pixels);
+  if ((height_in_tiles == 0) || (width_in_tiles == 0)) {
+    return result;
+  }
+  size_t ty1 = (height_in_tiles - 1) << QOIR_TILE_SHIFT;
+  size_t tx1 = (width_in_tiles - 1) << QOIR_TILE_SHIFT;
+
+  qoir_private_swizzle_func swizzle_func = NULL;
+  switch (src_pixbuf->pixcfg.pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+      swizzle_func = qoir_private_swizzle__copy_4;
+      break;
+    case QOIR_PIXEL_FORMAT__BGR:
+      swizzle_func = qoir_private_swizzle__bgra__bgr;
+      break;
+    case QOIR_PIXEL_FORMAT__RGBX:
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      swizzle_func = qoir_private_swizzle__bgra__rgba;
+      break;
+    case QOIR_PIXEL_FORMAT__RGB:
+      swizzle_func = qoir_private_swizzle__bgra__rgb;
+      break;
+    default:
+      result.status_message = qoir_status_message__error_unsupported_pixfmt;
+      return result;
+  }
+
+  qoir_size_result (*encode_func)(uint8_t * dst_ptr,       //
+                                  const uint8_t* src_ptr,  //
+                                  uint32_t tw,             //
+                                  uint32_t th) =
+      ((src_pixbuf->pixcfg.pixfmt &
+        QOIR_PIXEL_FORMAT__MASK_FOR_ALPHA_TRANSPARENCY) ==
+       QOIR_PIXEL_ALPHA_TRANSPARENCY__OPAQUE)
+          ? qoir_private_encode_tile_opcodes_sans_alpha
+          : qoir_private_encode_tile_opcodes_with_alpha;
+
+  size_t num_src_channels =
+      qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
+  uint8_t* dp = dst_ptr;
+
+  uint8_t* literals_pre_padding = encbuf->private_impl.literals;
+  for (int i = 0; i < QOIR_LITERALS_PRE_PADDING; i += 4) {
+    literals_pre_padding[i + 0] = 0x00;
+    literals_pre_padding[i + 1] = 0x00;
+    literals_pre_padding[i + 2] = 0x00;
+    literals_pre_padding[i + 3] = 0xFF;
+  }
+
+  // ty, tx, tw and th are the tile's top-left offset, width and height, all
+  // measured in pixels.
+  for (size_t ty = 0; ty <= ty1; ty += QOIR_TILE_SIZE) {
+    for (size_t tx = 0; tx <= tx1; tx += QOIR_TILE_SIZE) {
+      size_t tw = qoir_private_tile_dimension(
+          tx < tx1, src_pixbuf->pixcfg.width_in_pixels);
+      size_t th = qoir_private_tile_dimension(
+          ty < ty1, src_pixbuf->pixcfg.height_in_pixels);
+
+      const uint8_t* sp = src_pixbuf->data +
+                          (src_pixbuf->stride_in_bytes * ty) +
+                          (num_src_channels * tx);
+      (*swizzle_func)(encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+                      4 * tw,                           //
+                      sp, src_pixbuf->stride_in_bytes,  //
+                      tw, th);
+
+      if (lossiness == 0) {
+        // No-op.
+      } else if (!dither) {
+        for (size_t i = 0; i < 4 * tw * th; i++) {
+          encbuf->private_impl.literals[i + QOIR_LITERALS_PRE_PADDING] >>=
+              lossiness;
+        }
+      } else {
+        uint8_t* ptr =
+            &encbuf->private_impl.literals[QOIR_LITERALS_PRE_PADDING];
+        for (size_t y = 0; y < th; y++) {
+          for (size_t x = 0; x < tw; x++) {
+            uint8_t noise = qoir_private_table_noise[y & 15][x & 15];
+            qoir_private_encode_dither(ptr + 0, lossiness, noise);
+            qoir_private_encode_dither(ptr + 1, lossiness, noise);
+            qoir_private_encode_dither(ptr + 2, lossiness, noise);
+            qoir_private_encode_dither(ptr + 3, lossiness, noise);
+            ptr += 4;
+          }
+        }
+      }
+
+      qoir_size_result r0 = (*encode_func)(
+          encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
+      if (r0.status_message) {
+        result.status_message = r0.status_message;
+        return r0;
+      }
+      size_t literals_len = 4 * tw * th;
+      if (r0.value >= literals_len) {
+        // Use the Literals or LZ4-Literals tile format.
+        qoir_size_result r1 = qoir_lz4_block_encode(
+            dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
+            encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+            literals_len);
+        if (!r1.status_message && (r1.value < r0.value)) {
+          qoir_private_poke_u32le(dp, 0x02000000 | (uint32_t)r1.value);
+          dp += 4 + r1.value;
+        } else {
+          memcpy(dp + 4,
+                 encbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING,
+                 literals_len);
+          qoir_private_poke_u32le(dp, 0x00000000 | (uint32_t)literals_len);
+          dp += 4 + literals_len;
+        }
+
+      } else {
+        // Use the Opcodes or LZ4-Opcodes tile format.
+        qoir_size_result r1 =
+            qoir_lz4_block_encode(dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
+                                  encbuf->private_impl.opcodes, r0.value);
+        if (!r1.status_message && (r1.value < r0.value)) {
+          qoir_private_poke_u32le(dp, 0x03000000 | (uint32_t)r1.value);
+          dp += 4 + r1.value;
+        } else {
+          memcpy(dp + 4, encbuf->private_impl.opcodes, r0.value);
+          qoir_private_poke_u32le(dp, 0x01000000 | (uint32_t)r0.value);
+          dp += 4 + r0.value;
+        }
+      }
+    }
+  }
+
+  result.value = (size_t)(dp - dst_ptr);
+  return result;
+}
+
+QOIR_MAYBE_STATIC qoir_encode_result      //
+qoir_encode(                              //
+    const qoir_pixel_buffer* src_pixbuf,  //
+    const qoir_encode_options* options) {
+  qoir_encode_result result = {0};
+  if (!src_pixbuf) {
+    result.status_message = qoir_status_message__error_invalid_argument;
+    return result;
+  } else if ((src_pixbuf->pixcfg.width_in_pixels > 0xFFFFFF) ||
+             (src_pixbuf->pixcfg.height_in_pixels > 0xFFFFFF)) {
+    result.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    return result;
+  }
+
+  qoir_pixel_format dst_pixfmt = 0;
+  switch (src_pixbuf->pixcfg.pixfmt) {
+    case QOIR_PIXEL_FORMAT__BGRX:
+    case QOIR_PIXEL_FORMAT__BGR:
+    case QOIR_PIXEL_FORMAT__RGBX:
+    case QOIR_PIXEL_FORMAT__RGB:
+      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRX;
+      break;
+    case QOIR_PIXEL_FORMAT__BGRA_NONPREMUL:
+    case QOIR_PIXEL_FORMAT__RGBA_NONPREMUL:
+      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_NONPREMUL;
+      break;
+    case QOIR_PIXEL_FORMAT__BGRA_PREMUL:
+    case QOIR_PIXEL_FORMAT__RGBA_PREMUL:
+      dst_pixfmt = QOIR_PIXEL_FORMAT__BGRA_PREMUL;
+      break;
+    default:
+      result.status_message = qoir_status_message__error_unsupported_pixfmt;
+      return result;
+  }
+
+  uint64_t width_in_tiles =
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.width_in_pixels);
+  uint64_t height_in_tiles =
+      qoir_calculate_number_of_tiles_1d(src_pixbuf->pixcfg.height_in_pixels);
+  uint64_t tile_len_worst_case =
+      4 + (4 * QOIR_TS2);  // Prefix + literal format.
+  uint64_t dst_len_worst_case =
+      (width_in_tiles * height_in_tiles * tile_len_worst_case) +
+      44 +  // QOIR, QPIX and QEND chunk headers are 12 bytes each.
+            // QOIR also has an 8 byte payload.
+      (QOIR_TILE_LZ4_COMPRESSION_WORST_CASE -
+       (4 * QOIR_TS2));  // We might temporarily write more than (4 * QOIR_TS2)
+                         // bytes when LZ4 compressing each tile.
+  if (options) {
+    bool overflow = false;
+    if (options->metadata_cicp_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_cicp_len);
+    }
+    if (options->metadata_iccp_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_iccp_len);
+    }
+    if (options->metadata_exif_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_exif_len);
+    }
+    if (options->metadata_xmp_len) {
+      overflow = overflow ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case, 12) ||
+                 qoir_private_u64_overflow_add(&dst_len_worst_case,
+                                               options->metadata_xmp_len);
+    }
+    if (overflow) {
+      result.status_message =
+          qoir_status_message__error_unsupported_metadata_size;
+      return result;
+    }
+  }
+  if (dst_len_worst_case > SIZE_MAX) {
+    result.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    return result;
+  }
+  uint8_t* const original_dst_ptr = QOIR_MALLOC((size_t)dst_len_worst_case);
+  if (!original_dst_ptr) {
+    result.status_message = qoir_status_message__error_out_of_memory;
+    return result;
+  }
+  uint32_t lossiness = 0;
+  if (options) {
+    lossiness = options->lossiness;
+    if (lossiness > 7) {
+      lossiness = 7;
+    }
+  }
+  uint8_t* dst_ptr = original_dst_ptr;
+
+  // QOIR chunk.
+  qoir_private_poke_u32le(dst_ptr + 0, 0x52494F51);  // "QOIR"le.
+  qoir_private_poke_u64le(dst_ptr + 4, 8);
+  qoir_private_poke_u32le(dst_ptr + 12, src_pixbuf->pixcfg.width_in_pixels);
+  qoir_private_poke_u32le(dst_ptr + 16, src_pixbuf->pixcfg.height_in_pixels);
+  dst_ptr[15] = dst_pixfmt;
+  dst_ptr[19] = lossiness;
+  dst_ptr += 20;
+
+  // CICP chunk.
+  if (options && options->metadata_cicp_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x50434943);  // "CICP"le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_cicp_len);
+    memcpy(dst_ptr + 12, options->metadata_cicp_ptr,
+           options->metadata_cicp_len);
+    dst_ptr += 12 + options->metadata_cicp_len;
+  }
+
+  // ICCP chunk.
+  if (options && options->metadata_iccp_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x50434349);  // "ICCP"le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_iccp_len);
+    memcpy(dst_ptr + 12, options->metadata_iccp_ptr,
+           options->metadata_iccp_len);
+    dst_ptr += 12 + options->metadata_iccp_len;
+  }
+
+  // QPIX chunk.
+  qoir_private_poke_u32le(dst_ptr, 0x58495051);  // "QPIX"le.
+  qoir_encode_buffer* encbuf = options ? options->encbuf : NULL;
+  bool free_encbuf = false;
+  if (!encbuf) {
+    encbuf = (qoir_encode_buffer*)QOIR_MALLOC(sizeof(qoir_encode_buffer));
+    if (!encbuf) {
+      result.status_message = qoir_status_message__error_out_of_memory;
+      QOIR_FREE(original_dst_ptr);
+      return result;
+    }
+    free_encbuf = true;
+  }
+  qoir_size_result r = qoir_private_encode_qpix_payload(
+      encbuf, dst_ptr + 12, src_pixbuf, lossiness, options && options->dither);
+  if (free_encbuf) {
+    QOIR_FREE(encbuf);
+  }
+  if (r.status_message) {
+    result.status_message = r.status_message;
+    QOIR_FREE(original_dst_ptr);
+    return result;
+  } else if ((uint64_t)r.value > 0x7FFFFFFFFFFFFFFFull) {
+    result.status_message =
+        qoir_status_message__error_unsupported_pixbuf_dimensions;
+    QOIR_FREE(original_dst_ptr);
+    return result;
+  }
+  qoir_private_poke_u64le(dst_ptr + 4, r.value);
+  dst_ptr += 12 + r.value;
+
+  // EXIF chunk.
+  if (options && options->metadata_exif_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x46495845);  // "EXIF"le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_exif_len);
+    memcpy(dst_ptr + 12, options->metadata_exif_ptr,
+           options->metadata_exif_len);
+    dst_ptr += 12 + options->metadata_exif_len;
+  }
+
+  // XMP chunk.
+  if (options && options->metadata_xmp_len) {
+    qoir_private_poke_u32le(dst_ptr + 0, 0x20504D58);  // "XMP "le.
+    qoir_private_poke_u64le(dst_ptr + 4, options->metadata_xmp_len);
+    memcpy(dst_ptr + 12, options->metadata_xmp_ptr, options->metadata_xmp_len);
+    dst_ptr += 12 + options->metadata_xmp_len;
+  }
+
+  // QEND chunk.
+  qoir_private_poke_u32le(dst_ptr + 0, 0x444E4551);  // "QEND"le.
+  qoir_private_poke_u64le(dst_ptr + 4, 0);
+  dst_ptr += 12;
+
+  result.owned_memory = original_dst_ptr;
+  result.dst_ptr = original_dst_ptr;
+  result.dst_len = dst_ptr - original_dst_ptr;
+  return result;
+}
+
+// -------- Private Macros
+
+#undef QOIR_ALWAYS_INLINE
+#undef QOIR_FREE
+#undef QOIR_HASH_TABLE_SHIFT
+#undef QOIR_LZ4_HASH_TABLE_SHIFT
+#undef QOIR_MALLOC
+#undef QOIR_SWAR_PADDB
+#undef QOIR_SWAR_PSUBB
+#undef QOIR_USE_MEMCPY_LE_PEEK_POKE
+#undef QOIR_USE_SIMD_SSE2
 
 // ================================ -Private Implementation
 
