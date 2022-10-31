@@ -1,0 +1,7 @@
+RemoteOrigin: https://github.com/google/wuffs.git
+License: Apache-2.0
+
+CommitHash: dee65c0e61778bce6b0b0c4d26d68f1d579869dc
+CommitDate: 2022-10-28 17:29:05 +1100
+LocalModifications:
+None.
