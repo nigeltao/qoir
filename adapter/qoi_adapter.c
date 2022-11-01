@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef INCLUDE_GUARD_UTIL_EXTRA_BENCHMARKS
-#define INCLUDE_GUARD_UTIL_EXTRA_BENCHMARKS
-
-// ----
+#include "../src/qoir.h"
 
 #define QOI_IMPLEMENTATION
 #include "../third_party/qoi/qoi.h"
 
-static qoir_decode_result    //
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+qoir_decode_result           //
 my_decode_qoi(               //
     const uint8_t* src_ptr,  //
     const size_t src_len) {
@@ -45,7 +46,7 @@ my_decode_qoi(               //
   return result;
 }
 
-static qoir_encode_result    //
+qoir_encode_result           //
 my_encode_qoi(               //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
@@ -81,9 +82,11 @@ my_encode_qoi(               //
 
   qoir_encode_result result = {0};
   result.owned_memory = ptr;
-  result.dst_ptr = ptr;
+  result.dst_ptr = (uint8_t*)ptr;
   result.dst_len = len;
   return result;
 }
 
-#endif  // INCLUDE_GUARD_ETC
+#ifdef __cplusplus
+}  // extern "C"
+#endif

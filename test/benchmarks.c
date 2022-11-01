@@ -34,7 +34,7 @@ const char error_not_implemented[] =  //
     "#main: not implemented";
 
 #if defined(CONFIG_FULL_BENCHMARKS)
-#include "../util/extra_benchmarks.c"
+#include "../adapter/all_adapters.h"
 #endif
 
 // ----
@@ -119,7 +119,7 @@ my_decode_qoir(              //
 }
 
 static qoir_encode_result    //
-my_encode_qoir(              //
+my_encode_qoir_lossless(     //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf) {
@@ -132,6 +132,23 @@ my_encode_qoir(              //
   return qoir_encode(src_pixbuf, &encopts);
 }
 
+#if defined(CONFIG_FULL_BENCHMARKS)
+static qoir_encode_result    //
+my_encode_qoir_lossy(        //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf) {
+  // static avoids an allocation every time this function is called, but it
+  // means that this function is not thread-safe.
+  static qoir_encode_buffer encbuf;
+
+  qoir_encode_options encopts = {0};
+  encopts.encbuf = &encbuf;
+  encopts.lossiness = 2;
+  return qoir_encode(src_pixbuf, &encopts);
+}
+#endif
+
 typedef struct format_struct {
   const char* name;
   qoir_decode_result (*decode_func)(const uint8_t* src_ptr,
@@ -142,10 +159,22 @@ typedef struct format_struct {
 } format;
 
 format my_formats[] = {
-    {"QOIR", &my_decode_qoir, &my_encode_qoir},
-
 #if defined(CONFIG_FULL_BENCHMARKS)
+    {"JXL_Lossless/f", &my_decode_jxl_lib, &my_encode_jxl_lossless_fst},
+    {"JXL_Lossless/l", &my_decode_jxl_lib, &my_encode_jxl_lossless_lib},
+    {"JXL_Lossy/l", &my_decode_jxl_lib, &my_encode_jxl_lossy_lib},
+    {"PNG/fpng", &my_decode_png_fpng, &my_encode_png_fpng},
+    {"PNG/fpnge", &my_decode_png_fpnge, &my_encode_png_fpnge},
+    {"PNG/libpng", &my_decode_png_libpng, &my_encode_png_libpng},
+    {"PNG/stb", &my_decode_png_stb, &my_encode_png_stb},
+    {"PNG/wuffs", &my_decode_png_wuffs, &my_encode_png_wuffs},
     {"QOI", &my_decode_qoi, &my_encode_qoi},
+    {"QOIR_Lossless", &my_decode_qoir, &my_encode_qoir_lossless},
+    {"QOIR_Lossy", &my_decode_qoir, &my_encode_qoir_lossy},
+    {"WebP_Lossless", &my_decode_webp, &my_encode_webp_lossless},
+    {"WebP_Lossy", &my_decode_webp, &my_encode_webp_lossy},
+#else
+    {"QOIR", &my_decode_qoir, &my_encode_qoir_lossless},
 #endif
 };
 

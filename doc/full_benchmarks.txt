@@ -1,0 +1,242 @@
+The bottom of this file captures the output of
+
+    time ./run_full_benchmarks.sh images
+
+when run from the repository root directory. This takes about 8 hours on my
+desktop machine. The images directory was unpacked from the tar file at
+
+    https://qoiformat.org/benchmark/
+
+---
+
+My desktop machine:
+
+    $ cat /proc/cpuinfo | grep model.name | uniq
+    model name	: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
+    $ gcc --version
+    gcc (Debian 10.2.1-6) 10.2.1 20210110
+
+---
+
+CmpRatio     = CompressedSize / DecompressedSize. Lower is better.
+EncMPixels/s = Encode MegaPixels per second.     Higher is better.
+DecMPixels/s = Decode MegaPixels per second.     Higher is better.
+
+---
+
+Notes:
+
+JXL_Lossless/f  https://github.com/libjxl/libjxl.git experimental/fast_lossless encoder, regular decoder
+JXL_Lossless/l  https://github.com/libjxl/libjxl.git regular codec
+JXL_Lossy/l     https://github.com/libjxl/libjxl.git regular codec
+PNG/fpng        https://github.com/richgel999/fpng.git
+PNG/fpnge       https://github.com/veluca93/fpnge.git (encoder only)
+PNG/libpng      Debian Bullseye's libpng
+PNG/stb         https://github.com/nothings/stb.git
+PNG/wuffs       https://github.com/google/wuffs.git (decoder only; CmpRatio is the source PNG files as is)
+QOI             https://github.com/phoboslab/qoi.git
+QOIR_Lossless   This repository; default options
+QOIR_Lossy      This repository; lossiness=2
+WebP_Lossless   Debian Bullseye's libwebp
+WebP_Lossy      Debian Bullseye's libwebp
+
+Lossy encoders (other than QOIR) use the respective libraries' default options.
+Different size/speed trade-offs may be achievable with other options.
+
+---
+
+JXL_Lossless/f  0.2172 CmpRatio     58.92 EncMPixels/s     33.33 DecMPixels/s  images/
+JXL_Lossless/l  0.1548 CmpRatio      0.57 EncMPixels/s      4.64 DecMPixels/s  images/
+JXL_Lossy/l     0.0770 CmpRatio      2.19 EncMPixels/s     19.30 DecMPixels/s  images/
+PNG/fpng        0.3115 CmpRatio    192.16 EncMPixels/s    148.19 DecMPixels/s  images/
+PNG/fpnge       0.2798 CmpRatio    312.59 EncMPixels/s       nan DecMPixels/s  images/
+PNG/libpng      0.2423 CmpRatio      5.49 EncMPixels/s     56.18 DecMPixels/s  images/
+PNG/stb         0.3418 CmpRatio      7.67 EncMPixels/s     51.33 DecMPixels/s  images/
+PNG/wuffs       0.2388 CmpRatio       nan EncMPixels/s    140.79 DecMPixels/s  images/
+QOI             0.2823 CmpRatio    146.87 EncMPixels/s    193.53 DecMPixels/s  images/
+QOIR_Lossless   0.2525 CmpRatio    168.90 EncMPixels/s    276.45 DecMPixels/s  images/
+QOIR_Lossy      0.1618 CmpRatio    152.57 EncMPixels/s    202.05 DecMPixels/s  images/
+WebP_Lossless   0.1651 CmpRatio      2.49 EncMPixels/s     89.94 DecMPixels/s  images/
+WebP_Lossy      0.0213 CmpRatio     11.03 EncMPixels/s    125.29 DecMPixels/s  images/
+
+JXL_Lossless/f  0.0617 CmpRatio     75.74 EncMPixels/s     49.89 DecMPixels/s  images/icon_512/
+JXL_Lossless/l  0.0284 CmpRatio      0.99 EncMPixels/s      6.18 DecMPixels/s  images/icon_512/
+JXL_Lossy/l     0.0364 CmpRatio      1.79 EncMPixels/s     12.02 DecMPixels/s  images/icon_512/
+PNG/fpng        0.0840 CmpRatio    319.56 EncMPixels/s    323.05 DecMPixels/s  images/icon_512/
+PNG/fpnge       0.0792 CmpRatio    316.42 EncMPixels/s       nan DecMPixels/s  images/icon_512/
+PNG/libpng      0.0499 CmpRatio     14.13 EncMPixels/s     93.74 DecMPixels/s  images/icon_512/
+PNG/stb         0.0677 CmpRatio     14.08 EncMPixels/s    115.63 DecMPixels/s  images/icon_512/
+PNG/wuffs       0.0499 CmpRatio       nan EncMPixels/s    332.65 DecMPixels/s  images/icon_512/
+QOI             0.0835 CmpRatio    277.20 EncMPixels/s    341.29 DecMPixels/s  images/icon_512/
+QOIR_Lossless   0.0570 CmpRatio    360.99 EncMPixels/s    500.41 DecMPixels/s  images/icon_512/
+QOIR_Lossy      0.0328 CmpRatio    298.81 EncMPixels/s    329.86 DecMPixels/s  images/icon_512/
+WebP_Lossless   0.0276 CmpRatio      2.50 EncMPixels/s    203.67 DecMPixels/s  images/icon_512/
+WebP_Lossy      0.0102 CmpRatio      6.36 EncMPixels/s    151.61 DecMPixels/s  images/icon_512/
+
+JXL_Lossless/f  0.2260 CmpRatio     39.93 EncMPixels/s     17.42 DecMPixels/s  images/icon_64/
+JXL_Lossless/l  0.1691 CmpRatio      0.55 EncMPixels/s      3.76 DecMPixels/s  images/icon_64/
+JXL_Lossy/l     0.2084 CmpRatio      1.04 EncMPixels/s      8.21 DecMPixels/s  images/icon_64/
+PNG/fpng        0.3201 CmpRatio    193.31 EncMPixels/s     82.65 DecMPixels/s  images/icon_64/
+PNG/fpnge       0.3269 CmpRatio     82.45 EncMPixels/s       nan DecMPixels/s  images/icon_64/
+PNG/libpng      0.2370 CmpRatio      8.39 EncMPixels/s     45.93 DecMPixels/s  images/icon_64/
+PNG/stb         0.2786 CmpRatio      8.48 EncMPixels/s     58.67 DecMPixels/s  images/icon_64/
+PNG/wuffs       0.2373 CmpRatio       nan EncMPixels/s    116.52 DecMPixels/s  images/icon_64/
+QOI             0.2870 CmpRatio    185.12 EncMPixels/s    211.47 DecMPixels/s  images/icon_64/
+QOIR_Lossless   0.2470 CmpRatio    172.13 EncMPixels/s    306.01 DecMPixels/s  images/icon_64/
+QOIR_Lossy      0.1661 CmpRatio    159.30 EncMPixels/s    231.92 DecMPixels/s  images/icon_64/
+WebP_Lossless   0.1637 CmpRatio      0.61 EncMPixels/s     57.57 DecMPixels/s  images/icon_64/
+WebP_Lossy      0.0773 CmpRatio      3.67 EncMPixels/s     51.33 DecMPixels/s  images/icon_64/
+
+JXL_Lossless/f  0.4765 CmpRatio     40.17 EncMPixels/s     23.82 DecMPixels/s  images/photo_kodak/
+JXL_Lossless/l  0.3628 CmpRatio      0.45 EncMPixels/s      3.55 DecMPixels/s  images/photo_kodak/
+JXL_Lossy/l     0.1512 CmpRatio      3.43 EncMPixels/s     28.18 DecMPixels/s  images/photo_kodak/
+PNG/fpng        0.6727 CmpRatio    149.90 EncMPixels/s     99.63 DecMPixels/s  images/photo_kodak/
+PNG/fpnge       0.6218 CmpRatio    309.21 EncMPixels/s       nan DecMPixels/s  images/photo_kodak/
+PNG/libpng      0.5630 CmpRatio      3.67 EncMPixels/s     47.09 DecMPixels/s  images/photo_kodak/
+PNG/stb         0.7580 CmpRatio      5.65 EncMPixels/s     38.44 DecMPixels/s  images/photo_kodak/
+PNG/wuffs       0.5437 CmpRatio       nan EncMPixels/s     97.75 DecMPixels/s  images/photo_kodak/
+QOI             0.5829 CmpRatio    100.20 EncMPixels/s    135.21 DecMPixels/s  images/photo_kodak/
+QOIR_Lossless   0.5345 CmpRatio    113.04 EncMPixels/s    187.56 DecMPixels/s  images/photo_kodak/
+QOIR_Lossy      0.3799 CmpRatio     98.02 EncMPixels/s    137.89 DecMPixels/s  images/photo_kodak/
+WebP_Lossless   0.4005 CmpRatio      1.47 EncMPixels/s     51.74 DecMPixels/s  images/photo_kodak/
+WebP_Lossy      0.0413 CmpRatio     10.41 EncMPixels/s     91.89 DecMPixels/s  images/photo_kodak/
+
+JXL_Lossless/f  0.4447 CmpRatio     41.07 EncMPixels/s     24.22 DecMPixels/s  images/photo_tecnick/
+JXL_Lossless/l  0.3553 CmpRatio      0.39 EncMPixels/s      3.84 DecMPixels/s  images/photo_tecnick/
+JXL_Lossy/l     0.1275 CmpRatio      3.01 EncMPixels/s     31.27 DecMPixels/s  images/photo_tecnick/
+PNG/fpng        0.5968 CmpRatio    147.94 EncMPixels/s    107.66 DecMPixels/s  images/photo_tecnick/
+PNG/fpnge       0.5346 CmpRatio    319.16 EncMPixels/s       nan DecMPixels/s  images/photo_tecnick/
+PNG/libpng      0.5011 CmpRatio      3.36 EncMPixels/s     43.67 DecMPixels/s  images/photo_tecnick/
+PNG/stb         0.7238 CmpRatio      5.61 EncMPixels/s     33.90 DecMPixels/s  images/photo_tecnick/
+PNG/wuffs       0.5505 CmpRatio       nan EncMPixels/s     91.98 DecMPixels/s  images/photo_tecnick/
+QOI             0.5992 CmpRatio     97.34 EncMPixels/s    133.26 DecMPixels/s  images/photo_tecnick/
+QOIR_Lossless   0.5642 CmpRatio    110.20 EncMPixels/s    184.70 DecMPixels/s  images/photo_tecnick/
+QOIR_Lossy      0.3584 CmpRatio    100.51 EncMPixels/s    140.30 DecMPixels/s  images/photo_tecnick/
+WebP_Lossless   0.3948 CmpRatio      2.19 EncMPixels/s     52.51 DecMPixels/s  images/photo_tecnick/
+WebP_Lossy      0.0286 CmpRatio     11.58 EncMPixels/s    112.23 DecMPixels/s  images/photo_tecnick/
+
+JXL_Lossless/f  0.5147 CmpRatio     41.88 EncMPixels/s     23.76 DecMPixels/s  images/photo_wikipedia/
+JXL_Lossless/l  0.4204 CmpRatio      0.37 EncMPixels/s      3.61 DecMPixels/s  images/photo_wikipedia/
+JXL_Lossy/l     0.1542 CmpRatio      3.29 EncMPixels/s     28.39 DecMPixels/s  images/photo_wikipedia/
+PNG/fpng        0.6630 CmpRatio    147.78 EncMPixels/s    103.45 DecMPixels/s  images/photo_wikipedia/
+PNG/fpnge       0.6110 CmpRatio    302.17 EncMPixels/s       nan DecMPixels/s  images/photo_wikipedia/
+PNG/libpng      0.5663 CmpRatio      3.54 EncMPixels/s     46.57 DecMPixels/s  images/photo_wikipedia/
+PNG/stb         0.7864 CmpRatio      5.56 EncMPixels/s     37.05 DecMPixels/s  images/photo_wikipedia/
+PNG/wuffs       0.5541 CmpRatio       nan EncMPixels/s     88.34 DecMPixels/s  images/photo_wikipedia/
+QOI             0.6618 CmpRatio     96.44 EncMPixels/s    131.72 DecMPixels/s  images/photo_wikipedia/
+QOIR_Lossless   0.6145 CmpRatio    106.09 EncMPixels/s    180.61 DecMPixels/s  images/photo_wikipedia/
+QOIR_Lossy      0.3865 CmpRatio     99.20 EncMPixels/s    139.93 DecMPixels/s  images/photo_wikipedia/
+WebP_Lossless   0.4481 CmpRatio      2.11 EncMPixels/s     50.82 DecMPixels/s  images/photo_wikipedia/
+WebP_Lossy      0.0410 CmpRatio     10.59 EncMPixels/s     92.38 DecMPixels/s  images/photo_wikipedia/
+
+JXL_Lossless/f  0.1427 CmpRatio     72.93 EncMPixels/s     38.14 DecMPixels/s  images/pngimg/
+JXL_Lossless/l  0.1047 CmpRatio      0.57 EncMPixels/s      4.75 DecMPixels/s  images/pngimg/
+JXL_Lossy/l     0.0490 CmpRatio      1.83 EncMPixels/s     11.75 DecMPixels/s  images/pngimg/
+PNG/fpng        0.2101 CmpRatio    214.61 EncMPixels/s    180.39 DecMPixels/s  images/pngimg/
+PNG/fpnge       0.1863 CmpRatio    335.08 EncMPixels/s       nan DecMPixels/s  images/pngimg/
+PNG/libpng      0.1703 CmpRatio      6.42 EncMPixels/s     56.06 DecMPixels/s  images/pngimg/
+PNG/stb         0.2482 CmpRatio      8.11 EncMPixels/s     52.91 DecMPixels/s  images/pngimg/
+PNG/wuffs       0.1698 CmpRatio       nan EncMPixels/s    158.08 DecMPixels/s  images/pngimg/
+QOI             0.2036 CmpRatio    175.28 EncMPixels/s    234.58 DecMPixels/s  images/pngimg/
+QOIR_Lossless   0.1747 CmpRatio    216.15 EncMPixels/s    358.05 DecMPixels/s  images/pngimg/
+QOIR_Lossy      0.1113 CmpRatio    182.89 EncMPixels/s    235.83 DecMPixels/s  images/pngimg/
+WebP_Lossless   0.1127 CmpRatio      2.53 EncMPixels/s    112.41 DecMPixels/s  images/pngimg/
+WebP_Lossy      0.0130 CmpRatio      9.85 EncMPixels/s    144.11 DecMPixels/s  images/pngimg/
+
+JXL_Lossless/f  0.2026 CmpRatio     56.82 EncMPixels/s     33.92 DecMPixels/s  images/screenshot_game/
+JXL_Lossless/l  0.1304 CmpRatio      0.65 EncMPixels/s      4.76 DecMPixels/s  images/screenshot_game/
+JXL_Lossy/l     0.0796 CmpRatio      2.38 EncMPixels/s     31.49 DecMPixels/s  images/screenshot_game/
+PNG/fpng        0.2743 CmpRatio    197.66 EncMPixels/s    159.96 DecMPixels/s  images/screenshot_game/
+PNG/fpnge       0.2406 CmpRatio    318.75 EncMPixels/s       nan DecMPixels/s  images/screenshot_game/
+PNG/libpng      0.1995 CmpRatio      6.20 EncMPixels/s     60.25 DecMPixels/s  images/screenshot_game/
+PNG/stb         0.2796 CmpRatio      8.51 EncMPixels/s     54.25 DecMPixels/s  images/screenshot_game/
+PNG/wuffs       0.1988 CmpRatio       nan EncMPixels/s    152.35 DecMPixels/s  images/screenshot_game/
+QOI             0.2453 CmpRatio    154.42 EncMPixels/s    197.66 DecMPixels/s  images/screenshot_game/
+QOIR_Lossless   0.2132 CmpRatio    166.89 EncMPixels/s    266.38 DecMPixels/s  images/screenshot_game/
+QOIR_Lossy      0.1293 CmpRatio    161.67 EncMPixels/s    211.97 DecMPixels/s  images/screenshot_game/
+WebP_Lossless   0.1390 CmpRatio      2.44 EncMPixels/s     96.51 DecMPixels/s  images/screenshot_game/
+WebP_Lossy      0.0182 CmpRatio     13.09 EncMPixels/s    140.64 DecMPixels/s  images/screenshot_game/
+
+JXL_Lossless/f  0.0665 CmpRatio     93.08 EncMPixels/s     50.60 DecMPixels/s  images/screenshot_web/
+JXL_Lossless/l  0.0366 CmpRatio      0.86 EncMPixels/s      6.59 DecMPixels/s  images/screenshot_web/
+JXL_Lossy/l     0.0350 CmpRatio      1.85 EncMPixels/s     33.04 DecMPixels/s  images/screenshot_web/
+PNG/fpng        0.1004 CmpRatio    296.02 EncMPixels/s    319.22 DecMPixels/s  images/screenshot_web/
+PNG/fpnge       0.1009 CmpRatio    360.32 EncMPixels/s       nan DecMPixels/s  images/screenshot_web/
+PNG/libpng      0.0757 CmpRatio     13.94 EncMPixels/s     76.63 DecMPixels/s  images/screenshot_web/
+PNG/stb         0.0969 CmpRatio     11.79 EncMPixels/s     91.36 DecMPixels/s  images/screenshot_web/
+PNG/wuffs       0.0885 CmpRatio       nan EncMPixels/s    297.05 DecMPixels/s  images/screenshot_web/
+QOI             0.0835 CmpRatio    271.61 EncMPixels/s    358.64 DecMPixels/s  images/screenshot_web/
+QOIR_Lossless   0.0710 CmpRatio    316.12 EncMPixels/s    582.48 DecMPixels/s  images/screenshot_web/
+QOIR_Lossy      0.0452 CmpRatio    248.67 EncMPixels/s    322.98 DecMPixels/s  images/screenshot_web/
+WebP_Lossless   0.0476 CmpRatio      4.09 EncMPixels/s    138.62 DecMPixels/s  images/screenshot_web/
+WebP_Lossy      0.0235 CmpRatio     16.05 EncMPixels/s    131.72 DecMPixels/s  images/screenshot_web/
+
+JXL_Lossless/f  0.4294 CmpRatio     47.27 EncMPixels/s     28.40 DecMPixels/s  images/textures_photo/
+JXL_Lossless/l  0.3133 CmpRatio      0.46 EncMPixels/s      3.65 DecMPixels/s  images/textures_photo/
+JXL_Lossy/l     0.1645 CmpRatio      3.67 EncMPixels/s     29.28 DecMPixels/s  images/textures_photo/
+PNG/fpng        0.7760 CmpRatio    142.30 EncMPixels/s     92.61 DecMPixels/s  images/textures_photo/
+PNG/fpnge       0.7428 CmpRatio    281.39 EncMPixels/s       nan DecMPixels/s  images/textures_photo/
+PNG/libpng      0.5977 CmpRatio      4.14 EncMPixels/s     50.88 DecMPixels/s  images/textures_photo/
+PNG/stb         0.7600 CmpRatio      6.11 EncMPixels/s     42.40 DecMPixels/s  images/textures_photo/
+PNG/wuffs       0.6017 CmpRatio       nan EncMPixels/s     84.81 DecMPixels/s  images/textures_photo/
+QOI             0.6452 CmpRatio    113.67 EncMPixels/s    144.34 DecMPixels/s  images/textures_photo/
+QOIR_Lossless   0.6052 CmpRatio    104.30 EncMPixels/s    194.75 DecMPixels/s  images/textures_photo/
+QOIR_Lossy      0.4384 CmpRatio     95.31 EncMPixels/s    143.88 DecMPixels/s  images/textures_photo/
+WebP_Lossless   0.3610 CmpRatio      2.29 EncMPixels/s     59.83 DecMPixels/s  images/textures_photo/
+WebP_Lossy      0.0673 CmpRatio      9.14 EncMPixels/s     66.19 DecMPixels/s  images/textures_photo/
+
+JXL_Lossless/f  0.5455 CmpRatio     47.99 EncMPixels/s     25.24 DecMPixels/s  images/textures_pk/
+JXL_Lossless/l  0.2938 CmpRatio      0.94 EncMPixels/s      7.20 DecMPixels/s  images/textures_pk/
+JXL_Lossy/l     0.1748 CmpRatio      3.12 EncMPixels/s     23.19 DecMPixels/s  images/textures_pk/
+PNG/fpng        0.7426 CmpRatio    155.73 EncMPixels/s     88.41 DecMPixels/s  images/textures_pk/
+PNG/fpnge       0.6846 CmpRatio    230.36 EncMPixels/s       nan DecMPixels/s  images/textures_pk/
+PNG/libpng      0.5991 CmpRatio      5.31 EncMPixels/s     48.69 DecMPixels/s  images/textures_pk/
+PNG/stb         0.8047 CmpRatio      5.99 EncMPixels/s     48.11 DecMPixels/s  images/textures_pk/
+PNG/wuffs       0.3168 CmpRatio       nan EncMPixels/s    202.65 DecMPixels/s  images/textures_pk/
+QOI             0.5645 CmpRatio     94.58 EncMPixels/s    128.46 DecMPixels/s  images/textures_pk/
+QOIR_Lossless   0.4929 CmpRatio    110.06 EncMPixels/s    179.39 DecMPixels/s  images/textures_pk/
+QOIR_Lossy      0.3814 CmpRatio    108.07 EncMPixels/s    156.95 DecMPixels/s  images/textures_pk/
+WebP_Lossless   0.2601 CmpRatio      4.36 EncMPixels/s     95.65 DecMPixels/s  images/textures_pk/
+WebP_Lossy      0.0587 CmpRatio      9.37 EncMPixels/s     72.56 DecMPixels/s  images/textures_pk/
+
+JXL_Lossless/f  0.2718 CmpRatio     58.18 EncMPixels/s     30.34 DecMPixels/s  images/textures_pk01/
+JXL_Lossless/l  0.2165 CmpRatio      0.59 EncMPixels/s      4.04 DecMPixels/s  images/textures_pk01/
+JXL_Lossy/l     0.1100 CmpRatio      2.17 EncMPixels/s     21.08 DecMPixels/s  images/textures_pk01/
+PNG/fpng        0.4592 CmpRatio    152.85 EncMPixels/s     95.62 DecMPixels/s  images/textures_pk01/
+PNG/fpnge       0.4016 CmpRatio    231.69 EncMPixels/s       nan DecMPixels/s  images/textures_pk01/
+PNG/libpng      0.3226 CmpRatio      3.75 EncMPixels/s     48.18 DecMPixels/s  images/textures_pk01/
+PNG/stb         0.4579 CmpRatio      6.35 EncMPixels/s     46.51 DecMPixels/s  images/textures_pk01/
+PNG/wuffs       0.3227 CmpRatio       nan EncMPixels/s    101.85 DecMPixels/s  images/textures_pk01/
+QOI             0.3516 CmpRatio    121.69 EncMPixels/s    160.67 DecMPixels/s  images/textures_pk01/
+QOIR_Lossless   0.3207 CmpRatio    153.86 EncMPixels/s    234.24 DecMPixels/s  images/textures_pk01/
+QOIR_Lossy      0.2024 CmpRatio    141.45 EncMPixels/s    179.01 DecMPixels/s  images/textures_pk01/
+WebP_Lossless   0.2243 CmpRatio      1.25 EncMPixels/s     79.71 DecMPixels/s  images/textures_pk01/
+WebP_Lossy      0.0290 CmpRatio     10.75 EncMPixels/s     98.34 DecMPixels/s  images/textures_pk01/
+
+JXL_Lossless/f  0.3039 CmpRatio     52.90 EncMPixels/s     27.56 DecMPixels/s  images/textures_pk02/
+JXL_Lossless/l  0.2347 CmpRatio      0.50 EncMPixels/s      3.88 DecMPixels/s  images/textures_pk02/
+JXL_Lossy/l     0.1072 CmpRatio      2.37 EncMPixels/s     21.76 DecMPixels/s  images/textures_pk02/
+PNG/fpng        0.5406 CmpRatio    130.47 EncMPixels/s     82.67 DecMPixels/s  images/textures_pk02/
+PNG/fpnge       0.4734 CmpRatio    232.31 EncMPixels/s       nan DecMPixels/s  images/textures_pk02/
+PNG/libpng      0.3606 CmpRatio      2.93 EncMPixels/s     46.69 DecMPixels/s  images/textures_pk02/
+PNG/stb         0.5255 CmpRatio      5.55 EncMPixels/s     42.30 DecMPixels/s  images/textures_pk02/
+PNG/wuffs       0.3606 CmpRatio       nan EncMPixels/s     89.61 DecMPixels/s  images/textures_pk02/
+QOI             0.4038 CmpRatio    108.95 EncMPixels/s    135.84 DecMPixels/s  images/textures_pk02/
+QOIR_Lossless   0.3766 CmpRatio    133.91 EncMPixels/s    204.43 DecMPixels/s  images/textures_pk02/
+QOIR_Lossy      0.2359 CmpRatio    124.89 EncMPixels/s    155.46 DecMPixels/s  images/textures_pk02/
+WebP_Lossless   0.2422 CmpRatio      1.97 EncMPixels/s     71.08 DecMPixels/s  images/textures_pk02/
+WebP_Lossy      0.0264 CmpRatio     10.49 EncMPixels/s    106.74 DecMPixels/s  images/textures_pk02/
+
+JXL_Lossless/f  0.1542 CmpRatio     67.48 EncMPixels/s     38.00 DecMPixels/s  images/textures_plants/
+JXL_Lossless/l  0.1229 CmpRatio      0.52 EncMPixels/s      3.95 DecMPixels/s  images/textures_plants/
+JXL_Lossy/l     0.0622 CmpRatio      1.76 EncMPixels/s     11.29 DecMPixels/s  images/textures_plants/
+PNG/fpng        0.2392 CmpRatio    221.67 EncMPixels/s    174.20 DecMPixels/s  images/textures_plants/
+PNG/fpnge       0.2210 CmpRatio    330.46 EncMPixels/s       nan DecMPixels/s  images/textures_plants/
+PNG/libpng      0.2064 CmpRatio      5.91 EncMPixels/s     57.89 DecMPixels/s  images/textures_plants/
+PNG/stb         0.2866 CmpRatio      7.88 EncMPixels/s     60.43 DecMPixels/s  images/textures_plants/
+PNG/wuffs       0.2027 CmpRatio       nan EncMPixels/s    141.24 DecMPixels/s  images/textures_plants/
+QOI             0.2219 CmpRatio    179.23 EncMPixels/s    244.06 DecMPixels/s  images/textures_plants/
+QOIR_Lossless   0.2094 CmpRatio    234.21 EncMPixels/s    383.26 DecMPixels/s  images/textures_plants/
+QOIR_Lossy      0.1438 CmpRatio    171.24 EncMPixels/s    218.48 DecMPixels/s  images/textures_plants/
+WebP_Lossless   0.1187 CmpRatio      3.04 EncMPixels/s    115.89 DecMPixels/s  images/textures_plants/
+WebP_Lossy      0.0202 CmpRatio     10.81 EncMPixels/s    137.77 DecMPixels/s  images/textures_plants/

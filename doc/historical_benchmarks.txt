@@ -27,7 +27,11 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  167.50 gccEnc  272.43 gccDec  142.95 claEnc  175.39 claDec  Add script/run_full_benchmarks.sh
+PENDING  0.2526 CR  167.28 gccEnc  271.87 gccDec  144.36 claEnc  167.35 claDec  Add full benchmarks
+6006edf  0.2526 CR  167.49 gccEnc  271.84 gccDec  145.82 claEnc  167.62 claDec  Add more third_party libraries
+95cda40  0.2526 CR  167.59 gccEnc  272.38 gccDec  145.61 claEnc  167.82 claDec  Allow compilation with C++, not just C
+513df9d  0.2526 CR  168.12 gccEnc  272.82 gccDec  146.09 claEnc  167.81 claDec  Re-organize look-up tables
+5d02ee1  0.2526 CR  167.50 gccEnc  272.43 gccDec  142.95 claEnc  175.39 claDec  Add script/run_full_benchmarks.sh
 3d2f476  0.2526 CR  168.18 gccEnc  271.91 gccDec  145.71 claEnc  164.92 claDec  Re-format some C function signatures
 1bdc505  0.2526 CR  168.23 gccEnc  272.08 gccDec  145.20 claEnc  165.27 claDec  Have cmd/qoirconv encode PNG metadata
 913011d  0.2526 CR  167.52 gccEnc  272.21 gccDec  143.01 claEnc  175.73 claDec  Add cmd/qoirview --multithreaded option
