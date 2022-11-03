@@ -145,7 +145,8 @@ my_encode_jxl_lib(                  //
     const uint8_t* png_ptr,         //
     const size_t png_len,           //
     qoir_pixel_buffer* src_pixbuf,  //
-    bool lossless) {
+    bool lossless,                  //
+    int effort) {
   uint32_t num_channels;
   switch (src_pixbuf->pixcfg.pixfmt) {
     case QOIR_PIXEL_FORMAT__RGB:
@@ -197,6 +198,13 @@ my_encode_jxl_lib(                  //
     qoir_encode_result fail_result = {0};
     fail_result.status_message =
         "#my_encode_jxl_lib: JxlEncoderSetFrameLossless failed";
+    return fail_result;
+  } else if (JXL_ENC_SUCCESS !=
+             JxlEncoderFrameSettingsSetOption(
+                 frame_settings, JXL_ENC_FRAME_SETTING_EFFORT, effort)) {
+    qoir_encode_result fail_result = {0};
+    fail_result.status_message =
+        "#my_encode_jxl_lib: JxlEncoderFrameSettingsSetOption failed";
     return fail_result;
   }
 
@@ -253,20 +261,36 @@ my_encode_jxl_lib(                  //
   return result;
 }
 
-qoir_encode_result           //
-my_encode_jxl_lossless_lib(  //
-    const uint8_t* png_ptr,  //
-    const size_t png_len,    //
+qoir_encode_result            //
+my_encode_jxl_lossless_lib3(  //
+    const uint8_t* png_ptr,   //
+    const size_t png_len,     //
     qoir_pixel_buffer* src_pixbuf) {
-  return my_encode_jxl_lib(png_ptr, png_len, src_pixbuf, true);
+  return my_encode_jxl_lib(png_ptr, png_len, src_pixbuf, true, 3);
+}
+
+qoir_encode_result            //
+my_encode_jxl_lossless_lib7(  //
+    const uint8_t* png_ptr,   //
+    const size_t png_len,     //
+    qoir_pixel_buffer* src_pixbuf) {
+  return my_encode_jxl_lib(png_ptr, png_len, src_pixbuf, true, 7);
 }
 
 qoir_encode_result           //
-my_encode_jxl_lossy_lib(     //
+my_encode_jxl_lossy_lib3(    //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf) {
-  return my_encode_jxl_lib(png_ptr, png_len, src_pixbuf, false);
+  return my_encode_jxl_lib(png_ptr, png_len, src_pixbuf, false, 3);
+}
+
+qoir_encode_result           //
+my_encode_jxl_lossy_lib7(    //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf) {
+  return my_encode_jxl_lib(png_ptr, png_len, src_pixbuf, false, 7);
 }
 
 qoir_encode_result           //

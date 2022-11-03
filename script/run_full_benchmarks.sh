@@ -25,8 +25,12 @@ mkdir -p out
 
 # The JXL-QOIR adapter assumes that you've built libjxl (per its README.md) as
 # ../libjxl/build relative to this directory.
+#
+# FASTLL_ENABLE_AVX2_INTRINSICS (which obviously assumes an AVX2 capable CPU)
+# configures libjxl's experimental/fast_lossless encoder.
 echo 'Compiling out/jxl_adapter.o'
 $CXX -c -march=native \
+    -DFASTLL_ENABLE_AVX2_INTRINSICS=1 \
     -I../libjxl/build/lib/include \
     -I../libjxl/lib/include \
     $CXXFLAGS -Wno-unknown-pragmas adapter/jxl_adapter.cpp \

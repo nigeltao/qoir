@@ -45,10 +45,10 @@ decodes 4.9x faster (0.203 versus 1.000)**.
 For example, PNG/fpng encodes faster (1.138x) than QOIR but produces larger
 (1.234x) files and decodes slower (0.536x) than QOIR.
 
-For example, JPEG-XL Lossless produces smaller files (0.613x) but encodes
-slower (0.003x) and decodes slower (0.017x) than QOIR. Inverting those last two
-numbers give QOIR encoding 296x faster and decoding 60x faster than JPEG-XL
-Lossless (using its default options).
+For example, JPEG-XL Lossless at its default encoder options produces smaller
+files (0.613x) but encodes slower (0.003x) and decodes slower (0.017x) than
+QOIR. Inverting those last two numbers give QOIR encoding 296x faster and
+decoding 60x faster than JPEG-XL Lossless (using its "effort = 7" option).
 
 The conclusion isn't that QOIR is always better or worse than any other format.
 It's all trade-offs. However, **QOIR has the fastest decode speed listed** and
@@ -75,8 +75,9 @@ EncMPixels/s = Encode MegaPixels per second.     Higher is better.
 DecMPixels/s = Decode MegaPixels per second.     Higher is better.
 
 QOIR_Lossless    1.000 CmpRatio     1.000 EncMPixels/s     1.000 DecMPixels/s  (1)
-JXL_Lossless/f   0.860 CmpRatio     0.349 EncMPixels/s     0.121 DecMPixels/s  (2)
-JXL_Lossless/l   0.613 CmpRatio     0.003 EncMPixels/s     0.017 DecMPixels/s
+JXL_Lossless/f   0.860 CmpRatio     0.630 EncMPixels/s     0.120 DecMPixels/s  (2)
+JXL_Lossless/l3  0.725 CmpRatio     0.032 EncMPixels/s     0.022 DecMPixels/s
+JXL_Lossless/l7  0.613 CmpRatio     0.003 EncMPixels/s     0.017 DecMPixels/s
 PNG/fpng         1.234 CmpRatio     1.138 EncMPixels/s     0.536 DecMPixels/s  (1)
 PNG/fpnge        1.108 CmpRatio     1.851 EncMPixels/s       n/a DecMPixels/s  (1)
 PNG/libpng       0.960 CmpRatio     0.033 EncMPixels/s     0.203 DecMPixels/s
@@ -109,7 +110,8 @@ again, there are trade-offs.
 
 ```
 QOIR_Lossy       0.641 CmpRatio     0.903 EncMPixels/s     0.731 DecMPixels/s  (1)
-JXL_Lossy/l      0.305 CmpRatio     0.013 EncMPixels/s     0.070 DecMPixels/s
+JXL_Lossy/l3     0.440 CmpRatio     0.051 EncMPixels/s     0.091 DecMPixels/s
+JXL_Lossy/l7     0.305 CmpRatio     0.013 EncMPixels/s     0.070 DecMPixels/s
 WebP_Lossy       0.084 CmpRatio     0.065 EncMPixels/s     0.453 DecMPixels/s
 ```
 
@@ -134,7 +136,8 @@ implementation has no dependencies (and brings its own LZ4 implementation).
 JXL ([libjxl/libjxl](https://github.com/libjxl/libjxl.git)) is the official
 JPEG-XL library. The /l suffix denotes the regular libjxl implementation and
 the /f suffix denotes the `experimental/fast_lossless` encoder (also known as
-fjxl) in that repository (but still using the regular libjxl decoder).
+fjxl) in that repository (but still using the regular libjxl decoder). The
+final 3 or 7 denotes libjxl's "effort" encoding option, which defaults to 7.
 
 PNG/fpng ([richgel999/fpng](https://github.com/richgel999/fpng.git)) is a fast
 PNG encoder and decoder. The encoded output are valid PNG images but the fpng

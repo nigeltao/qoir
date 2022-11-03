@@ -161,8 +161,10 @@ typedef struct format_struct {
 format my_formats[] = {
 #if defined(CONFIG_FULL_BENCHMARKS)
     {"JXL_Lossless/f", &my_decode_jxl_lib, &my_encode_jxl_lossless_fst},
-    {"JXL_Lossless/l", &my_decode_jxl_lib, &my_encode_jxl_lossless_lib},
-    {"JXL_Lossy/l", &my_decode_jxl_lib, &my_encode_jxl_lossy_lib},
+    {"JXL_Lossless/l3", &my_decode_jxl_lib, &my_encode_jxl_lossless_lib3},
+    {"JXL_Lossless/l7", &my_decode_jxl_lib, &my_encode_jxl_lossless_lib7},
+    {"JXL_Lossy/l3", &my_decode_jxl_lib, &my_encode_jxl_lossy_lib3},
+    {"JXL_Lossy/l7", &my_decode_jxl_lib, &my_encode_jxl_lossy_lib7},
     {"PNG/fpng", &my_decode_png_fpng, &my_encode_png_fpng},
     {"PNG/fpnge", &my_decode_png_fpnge, &my_encode_png_fpnge},
     {"PNG/libpng", &my_decode_png_libpng, &my_encode_png_libpng},

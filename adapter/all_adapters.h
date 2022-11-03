@@ -69,14 +69,26 @@ my_encode_jxl_lossless_fst(  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf);
 
+qoir_encode_result            //
+my_encode_jxl_lossless_lib3(  //
+    const uint8_t* png_ptr,   //
+    const size_t png_len,     //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result            //
+my_encode_jxl_lossless_lib7(  //
+    const uint8_t* png_ptr,   //
+    const size_t png_len,     //
+    qoir_pixel_buffer* src_pixbuf);
+
 qoir_encode_result           //
-my_encode_jxl_lossless_lib(  //
+my_encode_jxl_lossy_lib3(    //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf);
 
 qoir_encode_result           //
-my_encode_jxl_lossy_lib(     //
+my_encode_jxl_lossy_lib7(    //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf);
