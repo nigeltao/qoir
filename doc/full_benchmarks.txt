@@ -1,6 +1,6 @@
 The bottom of this file captures the output of
 
-    time ./run_full_benchmarks.sh images
+    time script/run_full_benchmarks.sh images
 
 when run from the repository root directory. This takes about 8 hours on my
 desktop machine. The images directory was unpacked from the tar file at
