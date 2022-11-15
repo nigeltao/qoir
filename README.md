@@ -70,21 +70,23 @@ To repeat, it's all trade-offs.
 ### Lossless Benchmarks
 
 ```
-CmpRatio     = CompressedSize / DecompressedSize. Lower is better.
-EncMPixels/s = Encode MegaPixels per second.     Higher is better.
-DecMPixels/s = Decode MegaPixels per second.     Higher is better.
+Rel = Relative to QOIR_Lossless (which is normalized to 1.000)
 
-QOIR_Lossless    1.000 CmpRatio     1.000 EncMPixels/s     1.000 DecMPixels/s  (1)
-JXL_Lossless/f   0.860 CmpRatio     0.630 EncMPixels/s     0.120 DecMPixels/s  (2)
-JXL_Lossless/l3  0.725 CmpRatio     0.032 EncMPixels/s     0.022 DecMPixels/s
-JXL_Lossless/l7  0.613 CmpRatio     0.003 EncMPixels/s     0.017 DecMPixels/s
-PNG/fpng         1.234 CmpRatio     1.138 EncMPixels/s     0.536 DecMPixels/s  (1)
-PNG/fpnge        1.108 CmpRatio     1.851 EncMPixels/s       n/a DecMPixels/s  (1)
-PNG/libpng       0.960 CmpRatio     0.033 EncMPixels/s     0.203 DecMPixels/s
-PNG/stb          1.354 CmpRatio     0.045 EncMPixels/s     0.186 DecMPixels/s  (1)
-PNG/wuffs        0.946 CmpRatio       n/a EncMPixels/s     0.509 DecMPixels/s  (3)
-QOI              1.118 CmpRatio     0.870 EncMPixels/s     0.700 DecMPixels/s  (1)
-WebP_Lossless    0.654 CmpRatio     0.015 EncMPixels/s     0.325 DecMPixels/s
+RelCmpRatio  = Relative CompressedSize / DecompressedSize. Lower is better.
+RelEncSpeed  = Relative Encode MegaPixels per second.     Higher is better.
+RelDecSpeed  = Relative Decode MegaPixels per second.     Higher is better.
+
+QOIR_Lossless    1.000 RelCmpRatio    1.000 RelEncSpeed    1.000 RelDecSpeed   (1)
+JXL_Lossless/f   0.860 RelCmpRatio    0.630 RelEncSpeed    0.120 RelDecSpeed   (2)
+JXL_Lossless/l3  0.725 RelCmpRatio    0.032 RelEncSpeed    0.022 RelDecSpeed
+JXL_Lossless/l7  0.613 RelCmpRatio    0.003 RelEncSpeed    0.017 RelDecSpeed
+PNG/fpng         1.234 RelCmpRatio    1.138 RelEncSpeed    0.536 RelDecSpeed   (1)
+PNG/fpnge        1.108 RelCmpRatio    1.851 RelEncSpeed      n/a RelDecSpeed   (1)
+PNG/libpng       0.960 RelCmpRatio    0.033 RelEncSpeed    0.203 RelDecSpeed
+PNG/stb          1.354 RelCmpRatio    0.045 RelEncSpeed    0.186 RelDecSpeed   (1)
+PNG/wuffs        0.946 RelCmpRatio      n/a RelEncSpeed    0.509 RelDecSpeed   (1), (3)
+QOI              1.118 RelCmpRatio    0.870 RelEncSpeed    0.700 RelDecSpeed   (1)
+WebP_Lossless    0.654 RelCmpRatio    0.015 RelEncSpeed    0.325 RelDecSpeed
 ```
 
 (1) means that the codec implementation is available as a [single file C
@@ -96,9 +98,9 @@ repository, but I couldn't get it to work. Passing it something produced by the
 cjxl reference encoder produced `Error: Decoding failed (rnge) during
 j40_next_frame`.
 
-(3) means that the Wuffs decoder is a single file C library but there is no
-PNG/Wuffs encoder. The "compression ratio" numbers simply take the benchmark
-suite PNG images "as is" without re-encoding.
+(3) means that Wuffs' standard library has a PNG decoder but not a PNG encoder.
+The "compression ratio" numbers simply take the benchmark suite PNG images "as
+is" without re-encoding.
 
 
 ### Lossy Benchmarks
@@ -109,10 +111,10 @@ bits per channel). Here are some comparisons to other lossy formats. Once
 again, there are trade-offs.
 
 ```
-QOIR_Lossy       0.641 CmpRatio     0.903 EncMPixels/s     0.731 DecMPixels/s  (1)
-JXL_Lossy/l3     0.440 CmpRatio     0.051 EncMPixels/s     0.091 DecMPixels/s
-JXL_Lossy/l7     0.305 CmpRatio     0.013 EncMPixels/s     0.070 DecMPixels/s
-WebP_Lossy       0.084 CmpRatio     0.065 EncMPixels/s     0.453 DecMPixels/s
+QOIR_Lossy       0.641 RelCmpRatio    0.903 RelEncSpeed    0.731 RelDecSpeed   (1)
+JXL_Lossy/l3     0.440 RelCmpRatio    0.051 RelEncSpeed    0.091 RelDecSpeed
+JXL_Lossy/l7     0.305 RelCmpRatio    0.013 RelEncSpeed    0.070 RelDecSpeed
+WebP_Lossy       0.084 RelCmpRatio    0.065 RelEncSpeed    0.453 RelDecSpeed
 ```
 
 Lossy encoders (other than QOIR) use the respective libraries' default options.
@@ -190,6 +192,12 @@ PNG/libspng and PNG/lodepng weren't measured. They are presumably roughly
 comparable, [within a factor of
 2](https://nigeltao.github.io/blog/2021/fastest-safest-png-decoder.html#appendix-benchmark-numbers),
 to PNG/libpng and PNG/stb.
+
+
+## LZ4
+
+The LZ4 block compression implementation in this repository is available as a
+stand-alone [Single File LZ4 C Library](https://github.com/nigeltao/sflz4).
 
 
 ## License

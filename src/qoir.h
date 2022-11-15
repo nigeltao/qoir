@@ -325,9 +325,9 @@ qoir_decode_pixel_configuration(                          //
 
 typedef struct qoir_decode_buffer_struct {
   struct {
-    // opcodes has to be before literals, so that (worst case) we can read (and
-    // ignore) 8 bytes past the end of the opcodes array. See §
-    uint8_t opcodes[4 * QOIR_TS2];
+    // ops has to be before literals, so that (worst case) we can read (and
+    // ignore) 8 bytes past the end of the ops array. See §
+    uint8_t ops[4 * QOIR_TS2];
     uint8_t literals[QOIR_LITERALS_PRE_PADDING + (4 * QOIR_TS2)];
   } private_impl;
 } qoir_decode_buffer;
@@ -409,12 +409,12 @@ qoir_decode(                          //
 
 typedef struct qoir_encode_buffer_struct {
   struct {
-    // opcodes' size is ((5 * QOIR_TS2) + 64), not (4 * QOIR_TS2), because in
-    // the worst case (during encoding, before discarding the too-long opcodes
-    // in favor of literals), each pixel uses QOIR_OP_BGRA8, 5 bytes each. The
-    // +64 is for the same reason as §, but the +8 is rounded up to a multiple
-    // of a typical cache line size.
-    uint8_t opcodes[(5 * QOIR_TS2) + 64];
+    // ops' size is ((5 * QOIR_TS2) + 64), not (4 * QOIR_TS2), because in the
+    // worst case (during encoding, before discarding the too-long ops in favor
+    // of literals), each pixel uses QOIR_OP_BGRA8, 5 bytes each. The +64 is
+    // for the same reason as §, but the +8 is rounded up to a multiple of a
+    // typical cache line size.
+    uint8_t ops[(5 * QOIR_TS2) + 64];
     uint8_t literals[QOIR_LITERALS_PRE_PADDING + (4 * QOIR_TS2)];
   } private_impl;
 } qoir_encode_buffer;
@@ -5781,14 +5781,13 @@ qoir_private_choose_decode_swizzle_func(  //
 // so that the decode loop can always refer (by a simple offset of -4) to the
 // pixel left of the current pixel.
 //
-// Callers should pass (opcode_stream_length + 8) for src_len so that the
-// decode loop can always peek for 8 bytes, even at the end of the stream.
-// Reference: §
-static qoir_size_result            //
-qoir_private_decode_tile_opcodes(  //
-    uint8_t* dst_ptr,              //
-    size_t dst_len,                //
-    const uint8_t* src_ptr,        //
+// Callers should pass (total_ops_length + 8) for src_len so the decode loop
+// can always peek for 8 bytes, even at the end of the stream. Reference: §
+static qoir_size_result        //
+qoir_private_decode_tile_ops(  //
+    uint8_t* dst_ptr,          //
+    size_t dst_len,            //
+    const uint8_t* src_ptr,    //
     size_t src_len) {
   qoir_size_result result = {0};
 
@@ -6074,8 +6073,8 @@ qoir_private_decode_qpix_payload(       //
             literals = src_ptr;
             break;
           }
-          case 1: {  // Opcodes tile format.
-            qoir_size_result r = qoir_private_decode_tile_opcodes(
+          case 1: {  // Ops tile format.
+            qoir_size_result r = qoir_private_decode_tile_ops(
                 decbuf->private_impl.literals,              //
                 QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
                 src_ptr, tile_len + 8);                     // See § for +8.
@@ -6103,17 +6102,17 @@ qoir_private_decode_qpix_payload(       //
                 decbuf->private_impl.literals + QOIR_LITERALS_PRE_PADDING;
             break;
           }
-          case 3: {  // LZ4-Opcodes tile format.
+          case 3: {  // LZ4-Ops tile format.
             qoir_size_result r0 = qoir_lz4_block_decode(
-                decbuf->private_impl.opcodes,
-                sizeof(decbuf->private_impl.opcodes), src_ptr, tile_len);
+                decbuf->private_impl.ops, sizeof(decbuf->private_impl.ops),
+                src_ptr, tile_len);
             if (r0.status_message) {
               return qoir_status_message__error_invalid_data;
             }
-            qoir_size_result r1 = qoir_private_decode_tile_opcodes(
-                decbuf->private_impl.literals,                //
-                QOIR_LITERALS_PRE_PADDING + (4 * tw * th),    //
-                decbuf->private_impl.opcodes, r0.value + 8);  // See § for +8.
+            qoir_size_result r1 = qoir_private_decode_tile_ops(
+                decbuf->private_impl.literals,              //
+                QOIR_LITERALS_PRE_PADDING + (4 * tw * th),  //
+                decbuf->private_impl.ops, r0.value + 8);    // See § for +8.
             if (r1.status_message) {
               return r1.status_message;
             } else if (r1.value !=
@@ -6132,14 +6131,14 @@ qoir_private_decode_qpix_payload(       //
         src_len -= tile_len;
 
         if (lossiness) {
-          uint8_t* p = decbuf->private_impl.opcodes;
+          uint8_t* p = decbuf->private_impl.ops;
           const uint8_t* q = literals;
           const uint8_t* unlossify =
               qoir_private_table_unlossify[lossiness - 1];
           for (uint32_t i = 4 * tw * th; i > 0; i--) {
             *p++ = unlossify[*q++];
           }
-          literals = decbuf->private_impl.opcodes;
+          literals = decbuf->private_impl.ops;
         }
 
         uint8_t* dp =
@@ -6416,7 +6415,7 @@ qoir_private_encode_dither(     //
 }
 
 static QOIR_ALWAYS_INLINE qoir_size_result  //
-qoir_private_encode_tile_opcodes(           //
+qoir_private_encode_tile_ops(               //
     uint8_t* dst_ptr,                       //
     const uint8_t* src_ptr,                 //
     uint32_t tw,                            //
@@ -6619,22 +6618,22 @@ qoir_private_encode_tile_opcodes(           //
   return result;
 }
 
-static qoir_size_result                       //
-qoir_private_encode_tile_opcodes_sans_alpha(  //
-    uint8_t* dst_ptr,                         //
-    const uint8_t* src_ptr,                   //
-    uint32_t tw,                              //
+static qoir_size_result                   //
+qoir_private_encode_tile_ops_sans_alpha(  //
+    uint8_t* dst_ptr,                     //
+    const uint8_t* src_ptr,               //
+    uint32_t tw,                          //
     uint32_t th) {
-  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, false);
+  return qoir_private_encode_tile_ops(dst_ptr, src_ptr, tw, th, false);
 }
 
-static qoir_size_result                       //
-qoir_private_encode_tile_opcodes_with_alpha(  //
-    uint8_t* dst_ptr,                         //
-    const uint8_t* src_ptr,                   //
-    uint32_t tw,                              //
+static qoir_size_result                   //
+qoir_private_encode_tile_ops_with_alpha(  //
+    uint8_t* dst_ptr,                     //
+    const uint8_t* src_ptr,               //
+    uint32_t tw,                          //
     uint32_t th) {
-  return qoir_private_encode_tile_opcodes(dst_ptr, src_ptr, tw, th, true);
+  return qoir_private_encode_tile_ops(dst_ptr, src_ptr, tw, th, true);
 }
 
 static qoir_size_result                   //
@@ -6686,8 +6685,8 @@ qoir_private_encode_qpix_payload(         //
       ((src_pixbuf->pixcfg.pixfmt &
         QOIR_PIXEL_FORMAT__MASK_FOR_ALPHA_TRANSPARENCY) ==
        QOIR_PIXEL_ALPHA_TRANSPARENCY__OPAQUE)
-          ? qoir_private_encode_tile_opcodes_sans_alpha
-          : qoir_private_encode_tile_opcodes_with_alpha;
+          ? qoir_private_encode_tile_ops_sans_alpha
+          : qoir_private_encode_tile_ops_with_alpha;
 
   size_t num_src_channels =
       qoir_pixel_format__bytes_per_pixel(src_pixbuf->pixcfg.pixfmt);
@@ -6741,7 +6740,7 @@ qoir_private_encode_qpix_payload(         //
       }
 
       qoir_size_result r0 = (*encode_func)(
-          encbuf->private_impl.opcodes, encbuf->private_impl.literals, tw, th);
+          encbuf->private_impl.ops, encbuf->private_impl.literals, tw, th);
       if (r0.status_message) {
         result.status_message = r0.status_message;
         return r0;
@@ -6765,15 +6764,15 @@ qoir_private_encode_qpix_payload(         //
         }
 
       } else {
-        // Use the Opcodes or LZ4-Opcodes tile format.
+        // Use the Ops or LZ4-Ops tile format.
         qoir_size_result r1 =
             qoir_lz4_block_encode(dp + 4, QOIR_TILE_LZ4_COMPRESSION_WORST_CASE,
-                                  encbuf->private_impl.opcodes, r0.value);
+                                  encbuf->private_impl.ops, r0.value);
         if (!r1.status_message && (r1.value < r0.value)) {
           qoir_private_poke_u32le(dp, 0x03000000 | (uint32_t)r1.value);
           dp += 4 + r1.value;
         } else {
-          memcpy(dp + 4, encbuf->private_impl.opcodes, r0.value);
+          memcpy(dp + 4, encbuf->private_impl.ops, r0.value);
           qoir_private_poke_u32le(dp, 0x01000000 | (uint32_t)r0.value);
           dp += 4 + r0.value;
         }
