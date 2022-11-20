@@ -14,30 +14,12 @@
 
 #include <vector>
 
+#include "../../libjxl/experimental/fast_lossless/fast_lossless.cc"
 #include "../src/qoir.h"
 #include "jxl/decode.h"
 #include "jxl/decode_cxx.h"
 #include "jxl/encode.h"
 #include "jxl/encode_cxx.h"
-
-// ----
-
-#if defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wsign-compare"
-#endif
-
-// Both fjxl and fpnge declare "struct BitWriter" in the top-level namespace,
-// with the same name (and both have a Write(uint32_t, uint64_t) method) but
-// different field layout. Without this #define hack, the two can (silently)
-// conflict, leading to a crash.
-#define BitWriter FJXL_BitWriter
-#include "../../libjxl/experimental/fast_lossless/fast_lossless.cc"
-#undef BitWriter
-
-#if defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
 
 // ----
 
@@ -319,7 +301,7 @@ my_encode_jxl_lossless_fst(  //
   int default_effort = 2;
 
   unsigned char* dst_ptr = nullptr;
-  size_t dst_len = FastLosslessEncode(
+  size_t dst_len = JxlFastLosslessEncode(
       src_pixbuf->data, src_pixbuf->pixcfg.width_in_pixels,
       src_pixbuf->stride_in_bytes, src_pixbuf->pixcfg.height_in_pixels,
       num_channels, 8, default_effort, &dst_ptr);

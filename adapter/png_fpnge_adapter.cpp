@@ -13,14 +13,7 @@
 // limitations under the License.
 
 #include "../src/qoir.h"
-
-// Both fjxl and fpnge declare "struct BitWriter" in the top-level namespace,
-// with the same name (and both have a Write(uint32_t, uint64_t) method) but
-// different field layout. Without this #define hack, the two can (silently)
-// conflict, leading to a crash.
-#define BitWriter FPNGE_BitWriter
 #include "../third_party/fpnge/fpnge.cc"
-#undef BitWriter
 
 #ifdef __cplusplus
 extern "C" {

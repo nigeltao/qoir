@@ -85,6 +85,8 @@
 #error Requires SSE4.1 support minium
 #endif
 
+namespace {
+
 alignas(16) constexpr uint8_t kBitReverseNibbleLookup[16] = {
     0b0000, 0b1000, 0b0100, 0b1100, 0b0010, 0b1010, 0b0110, 0b1110,
     0b0001, 0b1001, 0b0101, 0b1101, 0b0011, 0b1011, 0b0111, 0b1111,
@@ -1435,6 +1437,8 @@ static void WriteHeader(size_t width, size_t height, size_t bytes_per_channel,
     writer->Write(32, 0xfe23234d); // CRC
   }
 }
+
+}  // namespace
 
 extern "C" size_t FPNGEEncode(size_t bytes_per_channel, size_t num_channels,
                               const void *data, size_t width, size_t row_stride,
