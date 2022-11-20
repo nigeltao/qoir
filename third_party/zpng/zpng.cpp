@@ -29,7 +29,7 @@
 
 #include "zpng.h"
 
-#include "zstd/zstd.h"
+#include "zstd.h"
 
 #include <stdlib.h> // calloc
 
@@ -363,7 +363,8 @@ extern "C" {
 // API
 
 ZPNG_Buffer ZPNG_Compress(
-    const ZPNG_ImageData* imageData
+    const ZPNG_ImageData* imageData,
+    bool noFilter
 )
 {
     uint8_t* packing = nullptr;
@@ -405,6 +406,7 @@ ReturnResult:
 
     // Pass 1: Pack and filter data.
 
+    if (noFilter) memcpy(packing, imageData->Buffer.Data, byteCount); else
     switch (pixelBytes)
     {
     case 1:
@@ -452,7 +454,7 @@ ReturnResult:
     header->Magic = ZPNG_HEADER_MAGIC;
     header->Width = (uint16_t)imageData->WidthPixels;
     header->Height = (uint16_t)imageData->HeightPixels;
-    header->Channels = (uint8_t)imageData->Channels;
+    header->Channels = (uint8_t)imageData->Channels | (noFilter ? 0x80 : 0x00);
     header->BytesPerChannel = (uint8_t)imageData->BytesPerChannel;
 
     bufferOutput.Data = output;
@@ -493,7 +495,7 @@ ReturnResult:
 
     imageData.WidthPixels = header->Width;
     imageData.HeightPixels = header->Height;
-    imageData.Channels = header->Channels;
+    imageData.Channels = header->Channels & 0x7F;
     imageData.BytesPerChannel = header->BytesPerChannel;
     imageData.StrideBytes = imageData.WidthPixels * imageData.Channels;
 
@@ -532,6 +534,7 @@ ReturnResult:
     imageData.Buffer.Data = output;
     imageData.Buffer.Bytes = byteCount;
 
+    if (header->Channels & 0x80) memcpy(output, packing, byteCount); else
     switch (pixelBytes)
     {
     case 1:

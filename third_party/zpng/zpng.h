@@ -104,7 +104,8 @@ struct ZPNG_ImageData
     On failure returns a null pointer.
 */
 ZPNG_Buffer ZPNG_Compress(
-    const ZPNG_ImageData* imageData
+    const ZPNG_ImageData* imageData,
+    bool noFilter
 );
 
 /*
