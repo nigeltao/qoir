@@ -4,4 +4,4 @@ License: BSD-3-Clause
 CommitHash: ead281baeaf83bfc45fc5eac61bd0e41a57b007a
 CommitDate: 2018-06-17 09:10:47 -0700
 LocalModifications:
-- PENDING Add third_party/zpng noFilter option
+- fed70ff Add third_party/zpng noFilter option

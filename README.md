@@ -51,18 +51,31 @@ QOIR. Inverting those last two numbers give QOIR encoding 296x faster and
 decoding 60x faster than JPEG-XL Lossless (using its "effort = 7" option).
 
 The conclusion isn't that QOIR is always better or worse than any other format.
-It's all trade-offs. However, **QOIR has the fastest decode speed listed** and
-achieves reasonable (roughly comparable to PNG) compression ratios. JXL and
-WebP, lossless or lossy, have better compression ratios but also slower encode
-and decode speeds.
+It's all trade-offs. However, on the full image test suite, **QOIR has the
+second-fastest decode speed listed** (the first-fastest is literally just
+zstd-compressing the RGB / RGBA pixel values, which produces 1.330x larger
+files than QOIR) and achieves reasonable (roughly comparable to PNG)
+compression ratios. JXL and WebP, lossless or lossy, have better compression
+ratios but also slower encode and decode speeds.
 
-Even though PNG/stb and QOI are worse than QOIR in all three columns
-(compression ratio, encoding speed and decoding speed), they still have their
-own advantages. PNG/stb, like any PNG implementation, has unrivalled
-compatibility with other software (and the stb library is easy to integrate,
-being a single file C library). QOI is the simplest (easiest to understand and
-easiest to customize) format, weighing under 700 lines of C code (QOIR is
-around 3000 lines of C code plus 4000 lines of data tables).
+**ZPNG "lossless" (the original, upstream ZPNG) is very competitive with and
+sometimes strictly better than QOIR**. It occupies a similar spot in the design
+space to QOIR: simple implementation, reasonable compression ratio, very fast
+encode / decode speeds. "Sometimes strictly better" means that, on some
+photographic-heavy subsets of the image test suite (see the [full
+benchmarks](doc/full_benchmarks.txt)), ZPNG outperforms QOIR on all three
+columns (compression ratio, encoding speed and decoding speed) simultaneously.
+ZPNG is in some sense simpler than QOIR (ZPNG is around 700 lines of C++ code
+plus a zstd dependency) but in another sense more complicated (because of the
+zstd dependency). QOIR is around 3000 lines of C code plus 4000 lines of data
+tables, without any further dependencies.
+
+Even though PNG/stb and QOI are worse than QOIR in all three columns, they
+still have their own advantages. PNG/stb, like any PNG implementation, has
+unrivalled compatibility with other software (and the stb library is easy to
+integrate, being a single file C library). QOI is the simplest (easiest to
+understand and easiest to customize) format, weighing under 700 lines of C
+code, without any further dependencies.
 
 To repeat, it's all trade-offs.
 
@@ -87,6 +100,8 @@ PNG/stb          1.354 RelCmpRatio    0.045 RelEncSpeed    0.186 RelDecSpeed   (
 PNG/wuffs        0.946 RelCmpRatio      n/a RelEncSpeed    0.509 RelDecSpeed   (1), (3)
 QOI              1.118 RelCmpRatio    0.870 RelEncSpeed    0.700 RelDecSpeed   (1)
 WebP_Lossless    0.654 RelCmpRatio    0.015 RelEncSpeed    0.325 RelDecSpeed
+ZPNG_Lossless    0.864 RelCmpRatio    0.747 RelEncSpeed    0.927 RelDecSpeed   (4)
+ZPNG_NofilLossl  1.330 RelCmpRatio    0.843 RelEncSpeed    1.168 RelDecSpeed   (4)
 ```
 
 (1) means that the codec implementation is available as a [single file C
@@ -102,6 +117,10 @@ j40_next_frame`.
 The "compression ratio" numbers simply take the benchmark suite PNG images "as
 is" without re-encoding.
 
+(4) means that ZPNG ships as a pair of `.cpp / .h` files, easily adaptable to a
+single-ish file C library, but it also introduces a dependency on the official
+zstd library.
+
 
 ### Lossy Benchmarks
 
@@ -115,10 +134,12 @@ QOIR_Lossy       0.641 RelCmpRatio    0.903 RelEncSpeed    0.731 RelDecSpeed   (
 JXL_Lossy/l3     0.440 RelCmpRatio    0.051 RelEncSpeed    0.091 RelDecSpeed
 JXL_Lossy/l7     0.305 RelCmpRatio    0.013 RelEncSpeed    0.070 RelDecSpeed
 WebP_Lossy       0.084 RelCmpRatio    0.065 RelEncSpeed    0.453 RelDecSpeed
+ZPNG_Lossy       0.645 RelCmpRatio    0.674 RelEncSpeed    0.898 RelDecSpeed   (4)
 ```
 
-Lossy encoders (other than QOIR) use the respective libraries' default options.
-Different size/speed/quality trade-offs may be achievable with other options.
+Lossy encoders (other than QOIR and ZPNG) use the respective libraries' default
+options. Different size / speed / quality trade-offs may be achievable with
+other options.
 
 
 ### Multi-Threading
@@ -135,36 +156,36 @@ depending on your input image size.
 These libraries are only used by the benchmark program. The QOIR codec
 implementation has no dependencies (and brings its own LZ4 implementation).
 
-JXL ([libjxl/libjxl](https://github.com/libjxl/libjxl.git)) is the official
-JPEG-XL library. The /l suffix denotes the regular libjxl implementation and
-the /f suffix denotes the `experimental/fast_lossless` encoder (also known as
-fjxl) in that repository (but still using the regular libjxl decoder). The
-final 3 or 7 denotes libjxl's "effort" encoding option, which defaults to 7.
+JXL ([libjxl/libjxl](https://github.com/libjxl/libjxl)) is the official JPEG-XL
+library. The /l suffix denotes the regular libjxl implementation and the /f
+suffix denotes the `experimental/fast_lossless` encoder (also known as fjxl) in
+that repository (but still using the regular libjxl decoder). The final 3 or 7
+denotes libjxl's "effort" encoding option, which defaults to 7.
 
-PNG/fpng ([richgel999/fpng](https://github.com/richgel999/fpng.git)) is a fast
-PNG encoder and decoder. The encoded output are valid PNG images but the fpng
+PNG/fpng ([richgel999/fpng](https://github.com/richgel999/fpng)) is a fast PNG
+encoder and decoder. The encoded output are valid PNG images but the fpng
 decoder only accepts fpng-encoded PNG images. It is not a general PNG decoder.
 It's also currently only SIMD-optimized for the x86 CPU family, not ARM.
 
-PNG/fpnge ([veluca93/fpnge](https://github.com/veluca93/fpnge.git)) is a very
-fast PNG encoder. The repository only contains an encoder, not a decoder. It's
-also currently only SIMD-optimized for the x86 CPU family, not ARM.
+PNG/fpnge ([veluca93/fpnge](https://github.com/veluca93/fpnge)) is a very fast
+PNG encoder. The repository only contains an encoder, not a decoder. It's also
+currently only SIMD-optimized for the x86 CPU family, not ARM.
 
 PNG/libpng is the official libpng library as built on Debian Bullseye.
 
-PNG/stb ([nothings/stb](https://github.com/nothings/stb.git)) is one of the
-best known "single file C library" PNG implementations.
+PNG/stb ([nothings/stb](https://github.com/nothings/stb)) is one of the best
+known "single file C library" PNG implementations.
 
-PNG/wuffs ([google/wuffs](https://github.com/google/wuffs.git)) is the PNG
-decoder from the Wuffs repository. There is no encoder but the decoder is
-discussed in ["The Fastest, Safest PNG Decoder in the
+PNG/wuffs ([google/wuffs](https://github.com/google/wuffs)) is the PNG decoder
+from the Wuffs repository. There is no encoder but the decoder is discussed in
+["The Fastest, Safest PNG Decoder in the
 World"](https://nigeltao.github.io/blog/2021/fastest-safest-png-decoder.html).
 While its reported decode speed here is not as fast as PNG/fpng, PNG/wuffs is a
 general PNG decoder and isn't limited to only those PNG images produced by the
 PNG/fpng encoder.
 
-QOI ([phoboslab/qoi](https://github.com/phoboslab/qoi.git)) is a recent
-(released in 2021), simple image file format that is remarkably competitive.
+QOI ([phoboslab/qoi](https://github.com/phoboslab/qoi)) is a recent (released
+in 2021), simple image file format that is remarkably competitive.
 
 QOIR is this repository. Lossless is the default option. Lossy means using the
 lossiness=2 encoding option, reducing each pixel from 8 to 6 bits per channel.
@@ -173,6 +194,12 @@ WebP is the official libwebp library as built on Debian Bullseye. The WebP file
 format cannot represent an image dimension greater than 16383 pixels, such as
 the 1313 x 20667 `screenshot_web/phoboslab.org.png` image from the benchmark
 suite. For these large images, we use PNG/libpng instead.
+
+ZPNG [catid/Zpng](https://github.com/catid/Zpng) is a simple, experimental,
+lossless image format that combines the zstd compression codec with PNG-style
+filtering. This repository adapts that third-party code to also create "lossy"
+(with QOIR's lossiness=2 quantization) and "no-filter lossless" (literally just
+zstd-compressed RGB / RGBA values) variants.
 
 
 ### Excluded Libraries
@@ -184,9 +211,11 @@ examples](https://github.com/AOMediaCodec/libavif/tree/b3e0f31/examples) or
 avif.h file not obviously showing how to encode *losslessly* from the library
 (not the command line tools). Maybe I'll try again later.
 
-JPEG wasn't measured. Around 45% of the [benchmark suite
-images](https://qoiformat.org/benchmark/) have an alpha channel, which JPEG
-cannot represent.
+[ImageZero](https://github.com/cfeck/imagezero) wasn't measured. Around 45% of
+the [benchmark suite images](https://qoiformat.org/benchmark/) have an alpha
+channel, which ImageZero cannot represent.
+
+JPEG wasn't measured, for the same "cannot represent alpha" reason.
 
 PNG/libspng and PNG/lodepng weren't measured. They are presumably roughly
 comparable, [within a factor of

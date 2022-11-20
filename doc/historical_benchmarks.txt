@@ -27,7 +27,14 @@ My desktop machine:
 ----
 
 Commit   CmpRatio   -------------gcc------------  ------------clang-----------
-PENDING  0.2526 CR  167.28 gccEnc  271.87 gccDec  144.36 claEnc  167.35 claDec  Add full benchmarks
+PENDING  0.2526 CR  168.26 gccEnc  272.65 gccDec  146.28 claEnc  168.00 claDec  Add ZPNG to full benchmarks
+fed70ff  0.2526 CR  168.34 gccEnc  272.97 gccDec  145.82 claEnc  168.08 claDec  Add third_party/zpng noFilter option
+4cb9322  0.2526 CR  167.89 gccEnc  273.34 gccDec  145.89 claEnc  168.08 claDec  Add third_party/zpng
+04cec85  0.2526 CR  167.86 gccEnc  272.91 gccDec  146.00 claEnc  168.03 claDec  Update third_party/fpnge and ../libjxl deps
+f09c2a2  0.2526 CR  168.18 gccEnc  272.72 gccDec  146.04 claEnc  168.14 claDec  Update doc/qoir_file_format.md
+c2fec84  0.2526 CR  168.14 gccEnc  272.84 gccDec  145.88 claEnc  168.03 claDec  Tweak JPEG XL full benchmarks
+075d78b  0.2526 CR  168.14 gccEnc  272.57 gccDec  145.49 claEnc  167.78 claDec  Fix "./run_full_benchmarks.sh" typo
+7cb0461  0.2526 CR  167.28 gccEnc  271.87 gccDec  144.36 claEnc  167.35 claDec  Add full benchmarks
 6006edf  0.2526 CR  167.49 gccEnc  271.84 gccDec  145.82 claEnc  167.62 claDec  Add more third_party libraries
 95cda40  0.2526 CR  167.59 gccEnc  272.38 gccDec  145.61 claEnc  167.82 claDec  Allow compilation with C++, not just C
 513df9d  0.2526 CR  168.12 gccEnc  272.82 gccDec  146.09 claEnc  167.81 claDec  Re-organize look-up tables

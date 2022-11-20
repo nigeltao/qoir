@@ -175,12 +175,15 @@ format my_formats[] = {
     {"QOIR_Lossy", &my_decode_qoir, &my_encode_qoir_lossy},
     {"WebP_Lossless", &my_decode_webp, &my_encode_webp_lossless},
     {"WebP_Lossy", &my_decode_webp, &my_encode_webp_lossy},
+    {"ZPNG_Lossless", &my_decode_zpng, &my_encode_zpng_lossless},
+    {"ZPNG_Lossy", &my_decode_zpng, &my_encode_zpng_lossy},
+    {"ZPNG_NofilLossl", &my_decode_zpng, &my_encode_zpng_nofilter_lossless},
 #else
     {"QOIR", &my_decode_qoir, &my_encode_qoir_lossless},
 #endif
 };
 
-#define MAX_INCL_NUMBER_OF_FORMATS 16
+#define MAX_INCL_NUMBER_OF_FORMATS 20
 
 static inline size_t  //
 number_of_formats() {

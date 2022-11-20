@@ -71,6 +71,11 @@ $CC  -c -march=native \
     $CXXFLAGS adapter/webp_adapter.c \
     $LDFLAGS -o out/webp_adapter.o
 
+echo 'Compiling out/zpng_adapter.o'
+$CXX -c -march=native \
+    $CXXFLAGS adapter/zpng_adapter.cpp \
+    $LDFLAGS -o out/zpng_adapter.o
+
 echo 'Compiling out/full_benchmarks'
 $CC -DCONFIG_FULL_BENCHMARKS=1 \
     $CFLAGS test/benchmarks.c \
@@ -82,8 +87,9 @@ $CC -DCONFIG_FULL_BENCHMARKS=1 \
     out/png_wuffs_adapter.o \
     out/qoi_adapter.o \
     out/webp_adapter.o \
+    out/zpng_adapter.o \
     -L../libjxl/build \
-    $LDFLAGS -ljxl -lpng -lstdc++ -lwebp -o out/full_benchmarks
+    $LDFLAGS -ljxl -lpng -lstdc++ -lwebp -lzstd -o out/full_benchmarks
 
 echo 'Running   out/full_benchmarks'
 # The "| awk etc" sorts by the final column.

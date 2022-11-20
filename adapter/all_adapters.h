@@ -61,6 +61,11 @@ my_decode_webp(              //
     const uint8_t* src_ptr,  //
     const size_t src_len);
 
+qoir_decode_result           //
+my_decode_zpng(              //
+    const uint8_t* src_ptr,  //
+    const size_t src_len);
+
 // ----
 
 qoir_encode_result           //
@@ -139,6 +144,24 @@ qoir_encode_result           //
 my_encode_webp_lossy(        //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result           //
+my_encode_zpng_lossless(     //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result           //
+my_encode_zpng_lossy(        //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result                 //
+my_encode_zpng_nofilter_lossless(  //
+    const uint8_t* png_ptr,        //
+    const size_t png_len,          //
     qoir_pixel_buffer* src_pixbuf);
 
 // ----
