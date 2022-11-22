@@ -27,6 +27,11 @@ my_decode_jxl_lib(           //
     const size_t src_len);
 
 qoir_decode_result           //
+my_decode_lz4png(            //
+    const uint8_t* src_ptr,  //
+    const size_t src_len);
+
+qoir_decode_result           //
 my_decode_png_fpng(          //
     const uint8_t* src_ptr,  //
     const size_t src_len);
@@ -90,6 +95,24 @@ qoir_encode_result           //
 my_encode_jxl_lossy_lib3(    //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result           //
+my_encode_lz4png_lossless(   //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result           //
+my_encode_lz4png_lossy(      //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result                   //
+my_encode_lz4png_nofilter_lossless(  //
+    const uint8_t* png_ptr,          //
+    const size_t png_len,            //
     qoir_pixel_buffer* src_pixbuf);
 
 qoir_encode_result           //

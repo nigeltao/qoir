@@ -52,11 +52,11 @@ decoding 60x faster than JPEG-XL Lossless (using its "effort = 7" option).
 
 The conclusion isn't that QOIR is always better or worse than any other format.
 It's all trade-offs. However, on the full image test suite, **QOIR has the
-second-fastest decode speed listed** (the first-fastest is literally just
-zstd-compressing the RGB / RGBA pixel values, which produces 1.330x larger
-files than QOIR) and achieves reasonable (roughly comparable to PNG)
-compression ratios. JXL and WebP, lossless or lossy, have better compression
-ratios but also slower encode and decode speeds.
+fastest decode speed listed for PNG-like (or better) compression ratios**. It
+can admittedly be faster than QOIR to literally just lz4-compress or
+zstd-compress the RGB / RGBA pixel values, but this produces 1.642x or 1.330x
+larger files respectively. Conversely, JXL and WebP, lossless or lossy, have
+better compression ratios but also slower encode and decode speeds.
 
 **ZPNG "lossless" (the original, upstream ZPNG) is very competitive with and
 sometimes strictly better than QOIR**. It occupies a similar spot in the design
@@ -90,18 +90,21 @@ RelEncSpeed  = Relative Encode MegaPixels per second.     Higher is better.
 RelDecSpeed  = Relative Decode MegaPixels per second.     Higher is better.
 
 QOIR_Lossless    1.000 RelCmpRatio    1.000 RelEncSpeed    1.000 RelDecSpeed   (1)
+
 JXL_Lossless/f   0.860 RelCmpRatio    0.630 RelEncSpeed    0.120 RelDecSpeed   (2)
 JXL_Lossless/l3  0.725 RelCmpRatio    0.032 RelEncSpeed    0.022 RelDecSpeed
 JXL_Lossless/l7  0.613 RelCmpRatio    0.003 RelEncSpeed    0.017 RelDecSpeed
+LZ4PNG_Lossless  1.403 RelCmpRatio    1.038 RelEncSpeed    1.300 RelDecSpeed   (3)
+LZ4PNG_NofilLsl  1.642 RelCmpRatio    1.312 RelEncSpeed    2.286 RelDecSpeed   (3)
 PNG/fpng         1.234 RelCmpRatio    1.138 RelEncSpeed    0.536 RelDecSpeed   (1)
 PNG/fpnge        1.108 RelCmpRatio    1.851 RelEncSpeed      n/a RelDecSpeed   (1)
 PNG/libpng       0.960 RelCmpRatio    0.033 RelEncSpeed    0.203 RelDecSpeed
 PNG/stb          1.354 RelCmpRatio    0.045 RelEncSpeed    0.186 RelDecSpeed   (1)
-PNG/wuffs        0.946 RelCmpRatio      n/a RelEncSpeed    0.509 RelDecSpeed   (1), (3)
+PNG/wuffs        0.946 RelCmpRatio      n/a RelEncSpeed    0.509 RelDecSpeed   (1), (4)
 QOI              1.118 RelCmpRatio    0.870 RelEncSpeed    0.700 RelDecSpeed   (1)
 WebP_Lossless    0.654 RelCmpRatio    0.015 RelEncSpeed    0.325 RelDecSpeed
-ZPNG_Lossless    0.864 RelCmpRatio    0.747 RelEncSpeed    0.927 RelDecSpeed   (4)
-ZPNG_NofilLossl  1.330 RelCmpRatio    0.843 RelEncSpeed    1.168 RelDecSpeed   (4)
+ZPNG_Lossless    0.864 RelCmpRatio    0.747 RelEncSpeed    0.927 RelDecSpeed   (3)
+ZPNG_NofilLsl    1.330 RelCmpRatio    0.843 RelEncSpeed    1.168 RelDecSpeed   (3)
 ```
 
 (1) means that the codec implementation is available as a [single file C
@@ -113,13 +116,13 @@ repository, but I couldn't get it to work. Passing it something produced by the
 cjxl reference encoder produced `Error: Decoding failed (rnge) during
 j40_next_frame`.
 
-(3) means that Wuffs' standard library has a PNG decoder but not a PNG encoder.
+(3) means that ZPNG (or LZ4PNG) ships as a pair of `.cpp / .h` files, easily
+adaptable to a single-ish file C library, but it also introduces a dependency
+on the official zstd (or lz4) library.
+
+(4) means that Wuffs' standard library has a PNG decoder but not a PNG encoder.
 The "compression ratio" numbers simply take the benchmark suite PNG images "as
 is" without re-encoding.
-
-(4) means that ZPNG ships as a pair of `.cpp / .h` files, easily adaptable to a
-single-ish file C library, but it also introduces a dependency on the official
-zstd library.
 
 
 ### Lossy Benchmarks
@@ -133,8 +136,9 @@ again, there are trade-offs.
 QOIR_Lossy       0.641 RelCmpRatio    0.903 RelEncSpeed    0.731 RelDecSpeed   (1)
 JXL_Lossy/l3     0.440 RelCmpRatio    0.051 RelEncSpeed    0.091 RelDecSpeed
 JXL_Lossy/l7     0.305 RelCmpRatio    0.013 RelEncSpeed    0.070 RelDecSpeed
+LZ4PNG_Lossy     1.095 RelCmpRatio    0.945 RelEncSpeed    1.251 RelDecSpeed   (3)
 WebP_Lossy       0.084 RelCmpRatio    0.065 RelEncSpeed    0.453 RelDecSpeed
-ZPNG_Lossy       0.645 RelCmpRatio    0.674 RelEncSpeed    0.898 RelDecSpeed   (4)
+ZPNG_Lossy       0.645 RelCmpRatio    0.674 RelEncSpeed    0.898 RelDecSpeed   (3)
 ```
 
 Lossy encoders (other than QOIR and ZPNG) use the respective libraries' default
@@ -161,6 +165,8 @@ library. The /l suffix denotes the regular libjxl implementation and the /f
 suffix denotes the `experimental/fast_lossless` encoder (also known as fjxl) in
 that repository (but still using the regular libjxl decoder). The final 3 or 7
 denotes libjxl's "effort" encoding option, which defaults to 7.
+
+LZ4PNG is ZPNG (see below) with lz4 instead of zstd compression.
 
 PNG/fpng ([richgel999/fpng](https://github.com/richgel999/fpng)) is a fast PNG
 encoder and decoder. The encoded output are valid PNG images but the fpng
