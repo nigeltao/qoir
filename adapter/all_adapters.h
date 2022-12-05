@@ -104,7 +104,7 @@ my_encode_lz4png_lossless(   //
     qoir_pixel_buffer* src_pixbuf);
 
 qoir_encode_result           //
-my_encode_lz4png_lossy(      //
+my_encode_lz4png_lossy2(     //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf);
@@ -170,13 +170,19 @@ my_encode_webp_lossy(        //
     qoir_pixel_buffer* src_pixbuf);
 
 qoir_encode_result           //
+my_encode_webp_lossy2(       //
+    const uint8_t* png_ptr,  //
+    const size_t png_len,    //
+    qoir_pixel_buffer* src_pixbuf);
+
+qoir_encode_result           //
 my_encode_zpng_lossless(     //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf);
 
 qoir_encode_result           //
-my_encode_zpng_lossy(        //
+my_encode_zpng_lossy2(       //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf);

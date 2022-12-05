@@ -1,8 +1,10 @@
 # QOIR: a Simple, Lossless Image File Format
 
-QOIR (pronounced like "choir") is simple, lossless image file format that is
+QOIR (pronounced like "choir") is a simple, lossless image file format that is
 very fast to encode and decode while achieving compression ratios roughly
 comparable to PNG.
+
+**WARNING: THIS FORMAT IS EXPERIMENTAL AND SUBJECT TO INCOMPATIBLE CHANGES.**
 
 It was inspired by the [QOI image file format](https://qoiformat.org/),
 building on it in a number of ways:
@@ -124,6 +126,14 @@ on the official zstd (or lz4) library.
 The "compression ratio" numbers simply take the benchmark suite PNG images "as
 is" without re-encoding.
 
+Here's a chart of (single-threaded) relative decode speed versus relative
+compression ratio, from the table above. Upwards and rightwards is better. It's
+not that encoding speed, code complexity, additional dependencies, multi-thread
+friendliness and compatibility with other software aren't important. They're
+just not in this chart.
+
+![RelDecSpeed vs RelCmpRatio](./doc/reldecspeed_vs_relcmpratio.png)
+
 
 ### Lossy Benchmarks
 
@@ -136,12 +146,17 @@ again, there are trade-offs.
 QOIR_Lossy       0.641 RelCmpRatio    0.903 RelEncSpeed    0.731 RelDecSpeed   (1)
 JXL_Lossy/l3     0.440 RelCmpRatio    0.051 RelEncSpeed    0.091 RelDecSpeed
 JXL_Lossy/l7     0.305 RelCmpRatio    0.013 RelEncSpeed    0.070 RelDecSpeed
-LZ4PNG_Lossy     1.095 RelCmpRatio    0.945 RelEncSpeed    1.251 RelDecSpeed   (3)
+LZ4PNG_Lossy2    1.095 RelCmpRatio    0.945 RelEncSpeed    1.251 RelDecSpeed   (5), (3)
 WebP_Lossy       0.084 RelCmpRatio    0.065 RelEncSpeed    0.453 RelDecSpeed
-ZPNG_Lossy       0.645 RelCmpRatio    0.674 RelEncSpeed    0.898 RelDecSpeed   (3)
+WebP_Lossy2      0.443 RelCmpRatio    0.015 RelEncSpeed    0.435 RelDecSpeed   (5)
+ZPNG_Lossy2      0.645 RelCmpRatio    0.674 RelEncSpeed    0.898 RelDecSpeed   (5), (3)
 ```
 
-Lossy encoders (other than QOIR and ZPNG) use the respective libraries' default
+(5), the Lossy2 suffix, means that the images are encoded losslessly (even
+though e.g. WebP does have its own lossy format) but after applying QOIR's
+lossiness=2 quantization, reducing each pixel from 8 to 6 bits per channel.
+
+Other lossy encoders (other than QOIR) use the respective libraries' default
 options. Different size / speed / quality trade-offs may be achievable with
 other options.
 
@@ -223,6 +238,9 @@ channel, which ImageZero cannot represent.
 
 JPEG wasn't measured, for the same "cannot represent alpha" reason.
 
+[MarcioPais/SIF](https://github.com/MarcioPais/SIF), "Simple Image Format",
+wasn't measured, for the same "cannot represent alpha" reason.
+
 PNG/libspng and PNG/lodepng weren't measured. They are presumably roughly
 comparable, [within a factor of
 2](https://nigeltao.github.io/blog/2021/fastest-safest-png-decoder.html#appendix-benchmark-numbers),
@@ -234,6 +252,12 @@ to PNG/libpng and PNG/stb.
 The LZ4 block compression implementation in this repository is available as a
 stand-alone [Single File LZ4 C Library](https://github.com/nigeltao/sflz4).
 
+You can instead subset just the `lz4.c` and `lz4.h` files from the [official
+lz4 library](https://github.com/lz4/lz4/tree/dev/lib), if you don't mind having
+two files.
+
+[smalllz4](https://create.stephan-brumme.com/smallz4/) is another alternative.
+
 
 ## License
 
@@ -242,4 +266,4 @@ Apache 2. See the [LICENSE](LICENSE) file for details.
 
 ---
 
-Updated on November 2022.
+Updated on December 2022.

@@ -61,7 +61,7 @@ my_encode_zpng(                     //
     const uint8_t* png_ptr,         //
     const size_t png_len,           //
     qoir_pixel_buffer* src_pixbuf,  //
-    bool lossy,                     //
+    bool lossy2,                    //
     bool no_filter) {
   unsigned int num_channels;
   switch (src_pixbuf->pixcfg.pixfmt) {
@@ -90,7 +90,7 @@ my_encode_zpng(                     //
   const size_t n = static_cast<size_t>(num_pixels);
 
   uint8_t* lossy_data = nullptr;
-  if (lossy) {
+  if (lossy2) {
     lossy_data = static_cast<uint8_t*>(malloc(n));
     if (!lossy_data) {
       qoir_encode_result fail_result = {0};
@@ -147,7 +147,7 @@ my_encode_zpng_lossless(     //
 }
 
 qoir_encode_result           //
-my_encode_zpng_lossy(        //
+my_encode_zpng_lossy2(       //
     const uint8_t* png_ptr,  //
     const size_t png_len,    //
     qoir_pixel_buffer* src_pixbuf) {

@@ -166,7 +166,7 @@ format my_formats[] = {
     {"JXL_Lossy/l3", &my_decode_jxl_lib, &my_encode_jxl_lossy_lib3},
     {"JXL_Lossy/l7", &my_decode_jxl_lib, &my_encode_jxl_lossy_lib7},
     {"LZ4PNG_Lossless", &my_decode_lz4png, &my_encode_lz4png_lossless},
-    {"LZ4PNG_Lossy", &my_decode_lz4png, &my_encode_lz4png_lossy},
+    {"LZ4PNG_Lossy2", &my_decode_lz4png, &my_encode_lz4png_lossy2},
     {"LZ4PNG_NofilLsl", &my_decode_lz4png, &my_encode_lz4png_nofilter_lossless},
     {"PNG/fpng", &my_decode_png_fpng, &my_encode_png_fpng},
     {"PNG/fpnge", &my_decode_png_fpnge, &my_encode_png_fpnge},
@@ -178,15 +178,16 @@ format my_formats[] = {
     {"QOIR_Lossy", &my_decode_qoir, &my_encode_qoir_lossy},
     {"WebP_Lossless", &my_decode_webp, &my_encode_webp_lossless},
     {"WebP_Lossy", &my_decode_webp, &my_encode_webp_lossy},
+    {"WebP_Lossy2", &my_decode_webp, &my_encode_webp_lossy2},
     {"ZPNG_Lossless", &my_decode_zpng, &my_encode_zpng_lossless},
-    {"ZPNG_Lossy", &my_decode_zpng, &my_encode_zpng_lossy},
+    {"ZPNG_Lossy2", &my_decode_zpng, &my_encode_zpng_lossy2},
     {"ZPNG_NofilLsl", &my_decode_zpng, &my_encode_zpng_nofilter_lossless},
 #else
     {"QOIR", &my_decode_qoir, &my_encode_qoir_lossless},
 #endif
 };
 
-#define MAX_INCL_NUMBER_OF_FORMATS 21
+#define MAX_INCL_NUMBER_OF_FORMATS 22
 
 static inline size_t  //
 number_of_formats() {
