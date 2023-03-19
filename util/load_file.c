@@ -43,7 +43,7 @@ load_file(               //
     return result;
   }
 
-  void* ptr = NULL;
+  uint8_t* ptr = NULL;
   size_t len = 0;
   size_t cap = 0;
   bool truncated = false;
@@ -66,7 +66,7 @@ load_file(               //
         result.status_message = "#load_file: out of memory";
         return result;
       }
-      void* new_ptr = realloc(ptr, cap);
+      uint8_t* new_ptr = (uint8_t*)realloc(ptr, cap);
       if (!new_ptr) {
         free(ptr);
         result.status_message = "#load_file: out of memory";
