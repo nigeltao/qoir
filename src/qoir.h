@@ -6217,7 +6217,7 @@ qoir_decode(                          //
     uint64_t qoir_chunk_payload_len = qoir_private_peek_u64le(src_ptr + 4);
     if ((qoir_chunk_payload_len < 8) ||
         (qoir_chunk_payload_len > 0x7FFFFFFFFFFFFFFFull) ||
-        (qoir_chunk_payload_len > (src_len - 44))) {
+        (qoir_chunk_payload_len > (src_len - (44 - 12)))) {
       return qoir_private_make_decode_result_error(
           qoir_status_message__error_invalid_data);
     }

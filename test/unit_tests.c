@@ -227,7 +227,8 @@ do_test_round_trip(        //
 int               //
 test_round_trip(  //
     void) {
-  if (do_test_round_trip(__func__, "test/data/bricks-color.png") ||
+  if (do_test_round_trip(__func__, "test/data/1x1-white.png") ||
+      do_test_round_trip(__func__, "test/data/bricks-color.png") ||
       do_test_round_trip(__func__, "test/data/harvesters.png") ||
       do_test_round_trip(__func__, "test/data/hibiscus.primitive.png") ||
       do_test_round_trip(__func__, "test/data/hibiscus.regular.png")) {
